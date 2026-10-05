@@ -20,8 +20,9 @@ mkdir -p "$WORKTREE/$SERVICE/testdata"
 cp "$ROOT/$SERVICE/testdata/mold-signing.json" "$WORKTREE/$SERVICE/testdata/"
 cd "$WORKTREE/cluster-autoscaler"
 go test -tags cloudstack -vet=atomic,bool,buildtags,directive,errorsas,ifaceassert,nilfunc,slog,stringintconv,tests ./cloudprovider/cloudstack/...
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -tags cloudstack -o "$OUTPUT/cluster-autoscaler" .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=true -trimpath -ldflags='-s -w' -tags cloudstack -o "$OUTPUT/cluster-autoscaler" .
 go version -m "$OUTPUT/cluster-autoscaler" > "$OUTPUT/go-modules.txt"
+grep -F "vcs.revision=$BASE" "$OUTPUT/go-modules.txt" >/dev/null || { echo "ERROR: binary baseline source SHA is missing" >&2; exit 1; }
 python3 - "$ROOT" "$MINOR" "$OUTPUT" <<'PY'
 import json,sys,pathlib,subprocess,hashlib,os
 root=pathlib.Path(sys.argv[1]);minor=sys.argv[2];out=pathlib.Path(sys.argv[3]);base=json.loads((root/'mold/baselines.json').read_text())[minor]
