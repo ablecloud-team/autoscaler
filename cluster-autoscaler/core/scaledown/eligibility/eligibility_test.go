@@ -24,7 +24,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	apiv1 "k8s.io/api/core/v1"
-	resourceapi "k8s.io/api/resource/v1beta1"
+	resourceapi "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	testprovider "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/test"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
@@ -39,15 +39,16 @@ import (
 )
 
 type testCase struct {
-	desc                        string
-	nodes                       []*apiv1.Node
-	pods                        []*apiv1.Pod
-	draSnapshot                 drasnapshot.Snapshot
-	draEnabled                  bool
-	wantUnneeded                []string
-	wantUnremovable             []*simulator.UnremovableNode
-	scaleDownUnready            bool
-	ignoreDaemonSetsUtilization bool
+	desc                          string
+	nodes                         []*apiv1.Node
+	pods                          []*apiv1.Pod
+	draSnapshot                   *drasnapshot.Snapshot
+	draEnabled                    bool
+	wantUnneeded                  []string
+	wantUnremovable               []*simulator.UnremovableNode
+	scaleDownUnready              bool
+	ignoreDaemonSetsUtilization   bool
+	scaleDownUtilizationThreshold *float64
 }
 
 func getTestCases(ignoreDaemonSetsUtilization bool, suffix string, now time.Time) []testCase {
@@ -75,11 +76,12 @@ func getTestCases(ignoreDaemonSetsUtilization bool, suffix string, now time.Time
 	dsPod.Spec.NodeName = "regular"
 
 	brokenUtilNode := BuildTestNode("regular", 0, 0)
+	resourceSliceNodeName := "regular"
 	regularNodeIncompleteResourceSlice := &resourceapi.ResourceSlice{
 		ObjectMeta: metav1.ObjectMeta{Name: "regularNodeIncompleteResourceSlice", UID: "regularNodeIncompleteResourceSlice"},
 		Spec: resourceapi.ResourceSliceSpec{
 			Driver:   "driver.foo.com",
-			NodeName: "regular",
+			NodeName: &resourceSliceNodeName,
 			Pool: resourceapi.ResourcePool{
 				Name:               "regular-pool",
 				ResourceSliceCount: 999,
@@ -196,6 +198,19 @@ func getTestCases(ignoreDaemonSetsUtilization bool, suffix string, now time.Time
 				wantUnremovable:             []*simulator.UnremovableNode{},
 				scaleDownUnready:            true,
 				ignoreDaemonSetsUtilization: true,
+			},
+			testCase{
+				desc:                        "only daemonsets pods on this nodes",
+				nodes:                       []*apiv1.Node{regularNode},
+				pods:                        []*apiv1.Pod{dsPod},
+				wantUnneeded:                []string{"regular"},
+				wantUnremovable:             []*simulator.UnremovableNode{},
+				scaleDownUnready:            true,
+				ignoreDaemonSetsUtilization: true,
+				scaleDownUtilizationThreshold: func() *float64 {
+					threshold := float64(0)
+					return &threshold
+				}(),
 			})
 	}
 
@@ -209,12 +224,16 @@ func TestFilterOutUnremovable(t *testing.T) {
 		tc := tc
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
+			utilizationThreshold := config.DefaultScaleDownUtilizationThreshold
+			if tc.scaleDownUtilizationThreshold != nil {
+				utilizationThreshold = *tc.scaleDownUtilizationThreshold
+			}
 			options := config.AutoscalingOptions{
 				DynamicResourceAllocationEnabled: tc.draEnabled,
 				UnremovableNodeRecheckTimeout:    5 * time.Minute,
 				ScaleDownUnreadyEnabled:          tc.scaleDownUnready,
 				NodeGroupDefaults: config.NodeGroupAutoscalingOptions{
-					ScaleDownUtilizationThreshold:    config.DefaultScaleDownUtilizationThreshold,
+					ScaleDownUtilizationThreshold:    utilizationThreshold,
 					ScaleDownGpuUtilizationThreshold: config.DefaultScaleDownGpuUtilizationThreshold,
 					ScaleDownUnneededTime:            config.DefaultScaleDownUnneededTime,
 					ScaleDownUnreadyTime:             config.DefaultScaleDownUnreadyTime,
@@ -223,7 +242,7 @@ func TestFilterOutUnremovable(t *testing.T) {
 			}
 			s := nodegroupconfig.NewDefaultNodeGroupConfigProcessor(options.NodeGroupDefaults)
 			c := NewChecker(s)
-			provider := testprovider.NewTestCloudProvider(nil, nil)
+			provider := testprovider.NewTestCloudProviderBuilder().Build()
 			provider.AddNodeGroup("ng1", 1, 10, 2)
 			for _, n := range tc.nodes {
 				provider.AddNode("ng1", n)

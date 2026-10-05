@@ -49,9 +49,12 @@ func SanitizedTemplateNodeInfoFromNodeGroup(nodeGroup nodeGroupTemplateNodeInfoG
 	if err != nil {
 		return nil, errors.ToAutoscalerError(errors.CloudProviderError, err).AddPrefix("failed to obtain template NodeInfo from node group %q: ", nodeGroup.Id())
 	}
-	labels.UpdateDeprecatedLabels(baseNodeInfo.Node().ObjectMeta.Labels)
-
-	return SanitizedTemplateNodeInfoFromNodeInfo(baseNodeInfo, nodeGroup.Id(), daemonsets, true, taintConfig)
+	sanitizedNodeInfo, aErr := SanitizedTemplateNodeInfoFromNodeInfo(baseNodeInfo, nodeGroup.Id(), daemonsets, true, taintConfig)
+	if aErr != nil {
+		return nil, aErr
+	}
+	labels.UpdateDeprecatedLabels(sanitizedNodeInfo.Node().Labels)
+	return sanitizedNodeInfo, nil
 }
 
 // SanitizedTemplateNodeInfoFromNodeInfo returns a template NodeInfo object based on a real example NodeInfo from the cluster. The template is sanitized, and only
@@ -70,9 +73,14 @@ func SanitizedTemplateNodeInfoFromNodeInfo(example *framework.NodeInfo, nodeGrou
 	if err != nil {
 		return nil, errors.ToAutoscalerError(errors.InternalError, err)
 	}
+	templateNodeInfo := framework.NewNodeInfo(sanitizedExample.Node(), sanitizedExample.LocalResourceSlices, expectedPods...)
+
+	// Allow this node to be recognized as a template node, so scale up issues like https://github.com/kubernetes/autoscaler/issues/9700 can be mitigated.
+	templateNodeInfo.Node().Labels["cluster-autoscaler.kubernetes.io/template-node"] = "true"
+
 	// No need to sanitize the expected pods again - they either come from sanitizedExample and were sanitized above,
 	// or were added by podsExpectedOnFreshNode and sanitized there.
-	return framework.NewNodeInfo(sanitizedExample.Node(), sanitizedExample.LocalResourceSlices, expectedPods...), nil
+	return templateNodeInfo, nil
 }
 
 // SanitizedNodeInfo duplicates the provided template NodeInfo, returning a fresh NodeInfo that can be injected into the cluster snapshot.

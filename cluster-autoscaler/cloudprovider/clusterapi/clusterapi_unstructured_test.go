@@ -24,10 +24,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
+	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -39,17 +41,19 @@ const (
 func TestSetSize(t *testing.T) {
 	initialReplicas := 1
 	updatedReplicas := 5
+	finalReplicas := 0
 
-	test := func(t *testing.T, testConfig *testConfig) {
-		controller, stop := mustCreateTestController(t, testConfig)
-		defer stop()
+	test := func(t *testing.T, testConfig *TestConfig) {
+		controller := NewTestMachineController(t)
+		defer controller.Stop()
+		controller.AddTestConfigs(testConfig)
 
 		testResource := testConfig.machineSet
 		if testConfig.machineDeployment != nil {
 			testResource = testConfig.machineDeployment
 		}
 
-		sr, err := newUnstructuredScalableResource(controller, testResource)
+		sr, err := newUnstructuredScalableResource(controller.machineController, testResource)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -59,6 +63,7 @@ func TestSetSize(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		// First update to updatedReplicas
 		err = sr.SetSize(updatedReplicas)
 		if err != nil {
 			t.Fatal(err)
@@ -84,32 +89,55 @@ func TestSetSize(t *testing.T) {
 		if replicas != int64(updatedReplicas) {
 			t.Errorf("expected %v, got: %v", updatedReplicas, replicas)
 		}
+
+		// Second update to finalReplicas
+		err = sr.SetSize(finalReplicas)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		s, err = sr.controller.managementScaleClient.Scales(testResource.GetNamespace()).
+			Get(context.TODO(), gvr.GroupResource(), testResource.GetName(), metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("error getting scale subresource: %v", err)
+		}
+
+		if s.Spec.Replicas != int32(finalReplicas) {
+			t.Errorf("expected %v, got: %v", finalReplicas, s.Spec.Replicas)
+		}
+
+		replicas, found, err = unstructured.NestedInt64(sr.unstructured.Object, "spec", "replicas")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			t.Fatal("replicas = 0")
+		}
+		if replicas != int64(finalReplicas) {
+			t.Errorf("expected %v, got: %v", finalReplicas, replicas)
+		}
 	}
 
+	annotations := map[string]string{
+		nodeGroupMinSizeAnnotationKey: "0",
+		nodeGroupMaxSizeAnnotationKey: "10",
+	}
 	t.Run("MachineSet", func(t *testing.T) {
-		test(t, createMachineSetTestConfig(
-			RandomString(6),
-			RandomString(6),
-			RandomString(6),
-			initialReplicas, map[string]string{
-				nodeGroupMinSizeAnnotationKey: "1",
-				nodeGroupMaxSizeAnnotationKey: "10",
-			},
-			nil,
-		))
+		testConfig := NewTestConfigBuilder().
+			ForMachineSet().
+			WithNodeCount(initialReplicas).
+			WithAnnotations(annotations).
+			Build()
+		test(t, testConfig)
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
-		test(t, createMachineDeploymentTestConfig(
-			RandomString(6),
-			RandomString(6),
-			RandomString(6),
-			initialReplicas, map[string]string{
-				nodeGroupMinSizeAnnotationKey: "1",
-				nodeGroupMaxSizeAnnotationKey: "10",
-			},
-			nil,
-		))
+		testConfig := NewTestConfigBuilder().
+			ForMachineDeployment().
+			WithNodeCount(initialReplicas).
+			WithAnnotations(annotations).
+			Build()
+		test(t, testConfig)
 	})
 }
 
@@ -117,16 +145,17 @@ func TestReplicas(t *testing.T) {
 	initialReplicas := 1
 	updatedReplicas := 5
 
-	test := func(t *testing.T, testConfig *testConfig) {
-		controller, stop := mustCreateTestController(t, testConfig)
-		defer stop()
+	test := func(t *testing.T, testConfig *TestConfig) {
+		controller := NewTestMachineController(t)
+		defer controller.Stop()
+		controller.AddTestConfigs(testConfig)
 
 		testResource := testConfig.machineSet
 		if testConfig.machineDeployment != nil {
 			testResource = testConfig.machineDeployment
 		}
 
-		sr, err := newUnstructuredScalableResource(controller, testResource)
+		sr, err := newUnstructuredScalableResource(controller.machineController, testResource)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -160,7 +189,7 @@ func TestReplicas(t *testing.T) {
 			if !ok {
 				return false, nil
 			}
-			sr, err := newUnstructuredScalableResource(controller, u)
+			sr, err := newUnstructuredScalableResource(controller.machineController, u)
 			if err != nil {
 				return true, err
 			}
@@ -213,11 +242,19 @@ func TestReplicas(t *testing.T) {
 	}
 
 	t.Run("MachineSet", func(t *testing.T) {
-		test(t, createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), initialReplicas, nil, nil))
+		testConfig := NewTestConfigBuilder().
+			ForMachineSet().
+			WithNodeCount(initialReplicas).
+			Build()
+		test(t, testConfig)
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
-		test(t, createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), initialReplicas, nil, nil))
+		testConfig := NewTestConfigBuilder().
+			ForMachineDeployment().
+			WithNodeCount(initialReplicas).
+			Build()
+		test(t, testConfig)
 	})
 }
 
@@ -225,16 +262,17 @@ func TestSetSizeAndReplicas(t *testing.T) {
 	initialReplicas := 1
 	updatedReplicas := 5
 
-	test := func(t *testing.T, testConfig *testConfig) {
-		controller, stop := mustCreateTestController(t, testConfig)
-		defer stop()
+	test := func(t *testing.T, testConfig *TestConfig) {
+		controller := NewTestMachineController(t)
+		defer controller.Stop()
+		controller.AddTestConfigs(testConfig)
 
 		testResource := testConfig.machineSet
 		if testConfig.machineDeployment != nil {
 			testResource = testConfig.machineDeployment
 		}
 
-		sr, err := newUnstructuredScalableResource(controller, testResource)
+		sr, err := newUnstructuredScalableResource(controller.machineController, testResource)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -263,30 +301,27 @@ func TestSetSizeAndReplicas(t *testing.T) {
 		}
 	}
 
+	annotations := map[string]string{
+		nodeGroupMinSizeAnnotationKey: "1",
+		nodeGroupMaxSizeAnnotationKey: "10",
+	}
+
 	t.Run("MachineSet", func(t *testing.T) {
-		test(t, createMachineSetTestConfig(
-			RandomString(6),
-			RandomString(6),
-			RandomString(6),
-			initialReplicas, map[string]string{
-				nodeGroupMinSizeAnnotationKey: "1",
-				nodeGroupMaxSizeAnnotationKey: "10",
-			},
-			nil,
-		))
+		testConfig := NewTestConfigBuilder().
+			ForMachineSet().
+			WithNodeCount(initialReplicas).
+			WithAnnotations(annotations).
+			Build()
+		test(t, testConfig)
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
-		test(t, createMachineDeploymentTestConfig(
-			RandomString(6),
-			RandomString(6),
-			RandomString(6),
-			initialReplicas, map[string]string{
-				nodeGroupMinSizeAnnotationKey: "1",
-				nodeGroupMaxSizeAnnotationKey: "10",
-			},
-			nil,
-		))
+		testConfig := NewTestConfigBuilder().
+			ForMachineDeployment().
+			WithNodeCount(initialReplicas).
+			WithAnnotations(annotations).
+			Build()
+		test(t, testConfig)
 	})
 }
 
@@ -297,6 +332,30 @@ func TestAnnotations(t *testing.T) {
 	gpuQuantity := resource.MustParse("1")
 	maxPodsQuantity := resource.MustParse("42")
 	expectedTaints := []v1.Taint{{Key: "key1", Effect: v1.TaintEffectNoSchedule, Value: "value1"}, {Key: "key2", Effect: v1.TaintEffectNoExecute, Value: "value2"}}
+	testNodeName := "test-node"
+	draDriver := "test-driver"
+	expectedResourceSlice := &resourceapi.ResourceSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: testNodeName + "-" + draDriver,
+		},
+		Spec: resourceapi.ResourceSliceSpec{
+			Driver:   draDriver,
+			NodeName: &testNodeName,
+			Pool: resourceapi.ResourcePool{
+				Name: testNodeName,
+			},
+			Devices: []resourceapi.Device{
+				{
+					Name: "gpu-0",
+					Attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+						"type": {
+							StringValue: ptr.To(GpuDeviceType),
+						},
+					},
+				},
+			},
+		},
+	}
 	annotations := map[string]string{
 		cpuKey:          cpuQuantity.String(),
 		memoryKey:       memQuantity.String(),
@@ -305,13 +364,15 @@ func TestAnnotations(t *testing.T) {
 		maxPodsKey:      maxPodsQuantity.String(),
 		taintsKey:       "key1=value1:NoSchedule,key2=value2:NoExecute",
 		labelsKey:       "key3=value3,key4=value4,key5=value5",
+		draDriverKey:    draDriver,
 	}
 
-	test := func(t *testing.T, testConfig *testConfig, testResource *unstructured.Unstructured) {
-		controller, stop := mustCreateTestController(t, testConfig)
-		defer stop()
+	test := func(t *testing.T, testConfig *TestConfig, testResource *unstructured.Unstructured) {
+		controller := NewTestMachineController(t)
+		defer controller.Stop()
+		controller.AddTestConfigs(testConfig)
 
-		sr, err := newUnstructuredScalableResource(controller, testResource)
+		sr, err := newUnstructuredScalableResource(controller.machineController, testResource)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -346,6 +407,14 @@ func TestAnnotations(t *testing.T) {
 			t.Errorf("expected %v, got %v", maxPodsQuantity, maxPods)
 		}
 
+		if resourceSlices, err := sr.InstanceResourceSlices(testNodeName); err != nil {
+			t.Fatal(err)
+		} else {
+			for _, resourceslice := range resourceSlices {
+				assert.Equal(t, expectedResourceSlice, resourceslice)
+			}
+		}
+
 		taints := sr.Taints()
 		assert.Equal(t, expectedTaints, taints)
 
@@ -357,12 +426,20 @@ func TestAnnotations(t *testing.T) {
 	}
 
 	t.Run("MachineSet", func(t *testing.T) {
-		testConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, annotations, nil)
+		testConfig := NewTestConfigBuilder().
+			ForMachineSet().
+			WithNodeCount(1).
+			WithAnnotations(annotations).
+			Build()
 		test(t, testConfig, testConfig.machineSet)
 	})
 
 	t.Run("MachineDeployment", func(t *testing.T) {
-		testConfig := createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, annotations, nil)
+		testConfig := NewTestConfigBuilder().
+			ForMachineDeployment().
+			WithNodeCount(1).
+			WithAnnotations(annotations).
+			Build()
 		test(t, testConfig, testConfig.machineDeployment)
 	})
 }
@@ -467,13 +544,19 @@ func TestCanScaleFromZero(t *testing.T) {
 	for _, tc := range testConfigs {
 		testname := fmt.Sprintf("MachineSet %s", tc.name)
 		t.Run(testname, func(t *testing.T) {
-			msTestConfig := createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, tc.annotations, tc.capacity)
-			controller, stop := mustCreateTestController(t, msTestConfig)
-			defer stop()
+			msTestConfig := NewTestConfigBuilder().
+				ForMachineSet().
+				WithNodeCount(1).
+				WithAnnotations(tc.annotations).
+				WithCapacity(tc.capacity).
+				Build()
+			controller := NewTestMachineController(t)
+			defer controller.Stop()
+			controller.AddTestConfigs(msTestConfig)
 
 			testResource := msTestConfig.machineSet
 
-			sr, err := newUnstructuredScalableResource(controller, testResource)
+			sr, err := newUnstructuredScalableResource(controller.machineController, testResource)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -488,13 +571,19 @@ func TestCanScaleFromZero(t *testing.T) {
 	for _, tc := range testConfigs {
 		testname := fmt.Sprintf("MachineDeployment %s", tc.name)
 		t.Run(testname, func(t *testing.T) {
-			msTestConfig := createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, tc.annotations, tc.capacity)
-			controller, stop := mustCreateTestController(t, msTestConfig)
-			defer stop()
+			mdTestConfig := NewTestConfigBuilder().
+				ForMachineDeployment().
+				WithNodeCount(1).
+				WithAnnotations(tc.annotations).
+				WithCapacity(tc.capacity).
+				Build()
+			controller := NewTestMachineController(t)
+			defer controller.Stop()
+			controller.AddTestConfigs(mdTestConfig)
 
-			testResource := msTestConfig.machineDeployment
+			testResource := mdTestConfig.machineDeployment
 
-			sr, err := newUnstructuredScalableResource(controller, testResource)
+			sr, err := newUnstructuredScalableResource(controller.machineController, testResource)
 			if err != nil {
 				t.Fatal(err)
 			}

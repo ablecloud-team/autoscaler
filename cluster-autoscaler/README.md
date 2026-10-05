@@ -23,6 +23,7 @@ You should also take a look at the notes and "gotchas" for your specific cloud p
 * [Civo](./cloudprovider/civo/README.md)
 * [CloudStack](./cloudprovider/cloudstack/README.md)
 * [ClusterAPI](./cloudprovider/clusterapi/README.md)
+* [CoreWeave](./cloudprovider/coreweave/README.md)
 * [DigitalOcean](./cloudprovider/digitalocean/README.md)
 * [Exoscale](./cloudprovider/exoscale/README.md)
 * [Equinix Metal](cloudprovider/equinixmetal/README.md#notes)
@@ -40,6 +41,7 @@ You should also take a look at the notes and "gotchas" for your specific cloud p
 * [Scaleway](./cloudprovider/scaleway/README.md)
 * [TencentCloud](./cloudprovider/tencentcloud/README.md)
 * [Vultr](./cloudprovider/vultr/README.md)
+* [Utho](./cloudprovider/utho/README.md)
 
 # Releases
 
@@ -49,6 +51,7 @@ Starting from Kubernetes 1.12, versioning scheme was changed to match Kubernetes
 
 | Kubernetes Version | CA Version               | Chart Version |
 |--------------------|--------------------------|---------------|
+| 1.33.x             | 1.33.x                   |9.47.0+|
 | 1.32.x             | 1.32.x                   |9.45.0+|
 | 1.31.x             | 1.31.x                   |9.38.0+|
 | 1.30.x             | 1.30.x                   |9.37.0+|
@@ -92,12 +95,12 @@ target ETA and the actual releases.
 
 | Date       | Maintainer Preparing Release | Backup Maintainer | Type  |
 |------------|------------------------------|-------------------|-------|
-| 2024-07-18 | x13n                         | MaciekPytel       | patch |
-| 2024-08-21 | MaciekPytel                  | gjtempleton       | 1.31  |
-| 2024-09-18 | gjtempleton                  | towca             | patch |
-| 2024-11-20 | towca                        | BigDarkClown      | patch |
-| 2024-12-18 | BigDarkClown                 | x13n              | 1.32  |
-| 2025-01-22 | x13n                         | MaciekPytel       | patch |
+| 2025-06-11 | jackfrancis                  | gjtempleton       | 1.33  |
+| 2025-07-16 | gjtempleton                  | towca             | patch |
+| 2025-08-20 | towca                        | BigDarkClown      | patch |
+| 2025-09-17 | BigDarkClown                 | x13n              | 1.34  |
+| 2025-10-22 | x13n                         | jackfrancis       | patch |
+| 2025-11-19 | jackfrancis                  | gjtempleton       | patch |
 
 Additional patch releases may happen outside of the schedule in case of critical
 bugs or vulnerabilities.
@@ -224,3 +227,4 @@ Supported cloud providers:
 * Scaleway https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/cloudprovider/scaleway/README.md
 * TencentCloud https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/cloudprovider/tencentcloud/README.md
 * Vultr https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/cloudprovider/vultr/README.md
+* Utho https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/cloudprovider/utho/README.md

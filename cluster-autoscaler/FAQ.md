@@ -42,6 +42,7 @@ this document:
   * [How can I enable/disable eviction for a specific DaemonSet](#how-can-i-enabledisable-eviction-for-a-specific-daemonset)
   * [How can I enable Cluster Autoscaler to scale up when Node's max volume count is exceeded (CSI migration enabled)?](#how-can-i-enable-cluster-autoscaler-to-scale-up-when-nodes-max-volume-count-is-exceeded-csi-migration-enabled)
   * [How can I use ProvisioningRequest to run batch workloads?](#how-can-i-use-provisioningrequest-to-run-batch-workloads)
+  * [How can I enable scale-up when a CSI driver uses node-specific CSIStorageCapacity objects?](#how-can-i-enable-scale-up-when-a-csi-driver-uses-node-specific-csistoragecapacity-objects)
 * [Internals](#internals)
   * [Are all of the mentioned heuristics and timings final?](#are-all-of-the-mentioned-heuristics-and-timings-final)
   * [How does scale-up work?](#how-does-scale-up-work)
@@ -755,6 +756,18 @@ spend processing CheckCapacity ProvisioningRequests in a single iteration by
 setting the following flag in your Cluster Autoscaler configuration:
 `--check-capacity-provisioning-request-batch-timebox=<timebox>`. The default value is 10s.
 
+### How can I enable scale-up when a CSI driver uses node-specific CSIStorageCapacity objects?
+
+Some CSI drivers publish `CSIStorageCapacity` objects with node-specific topology keys (e.g.
+`kubernetes.io/hostname=<node-name>`). During scale-up simulation, Cluster Autoscaler creates a
+template node based on an existing node. Because no `CSIStorageCapacity` object exists for this
+template node, the scheduler's storage capacity check fails during simulation and scale-up is
+blocked (see [#9700](https://github.com/kubernetes/autoscaler/issues/9700)).
+
+For mitigating issues like this, Cluster Autoscaler adds the label `cluster-autoscaler.kubernetes.io/template-node=true`
+to template nodes. CSI storage vendors can use this label to create a dedicated `CSIStorageCapacity`
+object that matches template nodes, allowing the scale-up simulation to succeed.
+
 ****************
 
 # Internals
@@ -990,7 +1003,7 @@ The following startup parameters are supported for cluster autoscaler:
 | `check-capacity-provisioning-request-batch-timebox` | Maximum time to process a batch of provisioning requests. | 10s |
 | `check-capacity-provisioning-request-max-batch-size` | Maximum number of provisioning requests to process in a single batch. | 10 |
 | `cloud-config` | The path to the cloud provider configuration file. Empty string for no configuration file. |  |
-| `cloud-provider` | Cloud provider type. Available values: [aws,azure,gce,alicloud,cherryservers,cloudstack,baiducloud,magnum,digitalocean,exoscale,externalgrpc,huaweicloud,hetzner,oci,ovhcloud,clusterapi,ionoscloud,kamatera,kwok,linode,bizflycloud,brightbox,equinixmetal,vultr,tencentcloud,civo,scaleway,rancher,volcengine] | "gce" |
+| `cloud-provider` | Cloud provider type. Available values: [aws,azure,gce,alicloud,cherryservers,cloudstack,baiducloud,magnum,digitalocean,exoscale,externalgrpc,huaweicloud,hetzner,oci,ovhcloud,clusterapi,ionoscloud,kamatera,kwok,linode,bizflycloud,brightbox,equinixmetal,vultr,tencentcloud,civo,scaleway,rancher,volcengine,utho] | "gce" |
 | `cloud-provider-gce-l7lb-src-cidrs` | CIDRs opened in GCE firewall for L7 LB traffic proxy & health checks | 130.211.0.0/22,35.191.0.0/16 |
 | `cloud-provider-gce-lb-src-cidrs` | CIDRs opened in GCE firewall for L4 LB traffic proxy & health checks | 130.211.0.0/22,209.85.152.0/22,209.85.204.0/22,35.191.0.0/16 |
 | `cluster-name` | Autoscaled cluster name, if available |  |

@@ -1,0 +1,12 @@
+{
+  "secret": "fixture-secret-do-not-use",
+  "params": {
+    "apiKey": "Mold+Key ~*한글",
+    "command": "listKubernetesClusters",
+    "response": "json",
+    "name": "a b+c%*~한글",
+    "details[0].value": "[]/?:&="
+  },
+  "canonical": "apikey=mold%2bkey%20%7e*%ed%95%9c%ea%b8%80&command=listkubernetesclusters&details[0].value=%5b%5d%2f%3f%3a%26%3d&name=a%20b%2bc%25*%7e%ed%95%9c%ea%b8%80&response=json",
+  "signature": "jtUvyLCj0yavREqx0ZRNy78O7Kf8FxY6zY8is870a0c="
+}
