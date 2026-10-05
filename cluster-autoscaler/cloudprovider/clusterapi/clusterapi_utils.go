@@ -32,15 +32,19 @@ import (
 )
 
 const (
-	cpuKey          = "capacity.cluster-autoscaler.kubernetes.io/cpu"
-	memoryKey       = "capacity.cluster-autoscaler.kubernetes.io/memory"
-	diskCapacityKey = "capacity.cluster-autoscaler.kubernetes.io/ephemeral-disk"
-	gpuTypeKey      = "capacity.cluster-autoscaler.kubernetes.io/gpu-type"
-	gpuCountKey     = "capacity.cluster-autoscaler.kubernetes.io/gpu-count"
-	maxPodsKey      = "capacity.cluster-autoscaler.kubernetes.io/maxPods"
-	taintsKey       = "capacity.cluster-autoscaler.kubernetes.io/taints"
-	labelsKey       = "capacity.cluster-autoscaler.kubernetes.io/labels"
-	draDriverKey    = "capacity.cluster-autoscaler.kubernetes.io/dra-driver"
+	cpuKey                              = "capacity.cluster-autoscaler.kubernetes.io/cpu"
+	memoryKey                           = "capacity.cluster-autoscaler.kubernetes.io/memory"
+	diskCapacityKey                     = "capacity.cluster-autoscaler.kubernetes.io/ephemeral-disk"
+	gpuTypeKey                          = "capacity.cluster-autoscaler.kubernetes.io/gpu-type"
+	gpuCountKey                         = "capacity.cluster-autoscaler.kubernetes.io/gpu-count"
+	maxPodsKey                          = "capacity.cluster-autoscaler.kubernetes.io/maxPods"
+	taintsKey                           = "capacity.cluster-autoscaler.kubernetes.io/taints"
+	labelsKey                           = "capacity.cluster-autoscaler.kubernetes.io/labels"
+	draDriverKey                        = "capacity.cluster-autoscaler.kubernetes.io/dra-driver"
+	csiDriverKey                        = "capacity.cluster-autoscaler.kubernetes.io/csi-driver"
+	machineDeploymentRevisionAnnotation = "machinedeployment.clusters.x-k8s.io/revision"
+	machineDeploymentNameLabel          = "cluster.x-k8s.io/deployment-name"
+	resourcePausedAnnotation            = "cluster.x-k8s.io/paused"
 	// UnknownArch is used if the Architecture is Unknown
 	UnknownArch SystemArchitecture = ""
 	// Amd64 is used if the Architecture is x86_64
@@ -407,7 +411,7 @@ func GetDefaultScaleFromZeroArchitecture() SystemArchitecture {
 		if arch == UnknownArch {
 			arch = DefaultArch
 			klog.Errorf("Unrecognized architecture '%s', falling back to %s",
-				scaleUpFromZeroDefaultArchEnvVar, DefaultArch.Name())
+				archStr, DefaultArch.Name())
 		}
 		systemArchitecture = &arch
 	})

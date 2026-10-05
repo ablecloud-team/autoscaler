@@ -35,7 +35,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/informers"
@@ -43,6 +42,7 @@ import (
 	fakescale "k8s.io/client-go/scale/fake"
 	clientgotesting "k8s.io/client-go/testing"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 type scalableTestType string
@@ -50,6 +50,7 @@ type scalableTestType string
 const (
 	machineSetType        scalableTestType = "MachineSet"
 	machineDeploymentType scalableTestType = "MachineDeployment"
+	machinePoolType       scalableTestType = "MachinePool"
 )
 
 type testConfigBuilder struct {
@@ -60,7 +61,9 @@ type testConfigBuilder struct {
 	nodeCount     int
 	annotations   map[string]string
 	capacity      map[string]string
+	nodeInfo      map[string]string
 	managedLabels map[string]string
+	specTaints    []map[string]interface{}
 }
 
 // NewTestConfigBuilder returns a builder for dynamically constructing mock ClusterAPI resources for testing.
@@ -81,6 +84,7 @@ func (b *testConfigBuilder) Build() *TestConfig {
 		panic("scalable API type must be specified")
 	}
 	isMachineDeployment := b.scalableType == machineDeploymentType
+	isMachinePool := b.scalableType == machinePoolType
 	configCount := 1
 
 	return createTestConfigs(
@@ -91,9 +95,12 @@ func (b *testConfigBuilder) Build() *TestConfig {
 			configCount,
 			b.nodeCount,
 			isMachineDeployment,
+			isMachinePool,
 			b.annotations,
 			b.capacity,
+			b.nodeInfo,
 			b.managedLabels,
+			b.specTaints,
 		)[0],
 	)[0]
 }
@@ -103,6 +110,7 @@ func (b *testConfigBuilder) BuildMultiple(configCount int) []*TestConfig {
 		panic("scalable API type must be specified")
 	}
 	isMachineDeployment := b.scalableType == machineDeploymentType
+	isMachinePool := b.scalableType == machinePoolType
 
 	return createTestConfigs(
 		createTestSpecs(
@@ -112,9 +120,12 @@ func (b *testConfigBuilder) BuildMultiple(configCount int) []*TestConfig {
 			configCount,
 			b.nodeCount,
 			isMachineDeployment,
+			isMachinePool,
 			b.annotations,
 			b.capacity,
+			b.nodeInfo,
 			b.managedLabels,
+			b.specTaints,
 		)...,
 	)
 }
@@ -126,6 +137,11 @@ func (b *testConfigBuilder) ForMachineSet() *testConfigBuilder {
 
 func (b *testConfigBuilder) ForMachineDeployment() *testConfigBuilder {
 	b.scalableType = machineDeploymentType
+	return b
+}
+
+func (b *testConfigBuilder) ForMachinePool() *testConfigBuilder {
+	b.scalableType = machinePoolType
 	return b
 }
 
@@ -175,6 +191,18 @@ func (b *testConfigBuilder) WithCapacity(c map[string]string) *testConfigBuilder
 	return b
 }
 
+func (b *testConfigBuilder) WithNodeInfo(n map[string]string) *testConfigBuilder {
+	if n == nil {
+		b.nodeInfo = nil
+	} else {
+		if b.nodeInfo == nil {
+			b.nodeInfo = map[string]string{}
+		}
+		maps.Insert(b.nodeInfo, maps.All(n))
+	}
+	return b
+}
+
 func (b *testConfigBuilder) WithManagedLabels(l map[string]string) *testConfigBuilder {
 	if l == nil {
 		// explicitly setting managed labels to nil
@@ -185,6 +213,11 @@ func (b *testConfigBuilder) WithManagedLabels(l map[string]string) *testConfigBu
 		}
 		maps.Insert(b.managedLabels, maps.All(l))
 	}
+	return b
+}
+
+func (b *testConfigBuilder) WithSpecTaints(taints []map[string]interface{}) *testConfigBuilder {
+	b.specTaints = taints
 	return b
 }
 
@@ -255,9 +288,19 @@ func createTestConfigs(specs ...TestSpec) []*TestConfig {
 			}
 		}
 
-		if !spec.rootIsMachineDeployment {
+		if spec.specTaints != nil {
+			rawTaints := make([]interface{}, len(spec.specTaints))
+			for i, t := range spec.specTaints {
+				rawTaints[i] = t
+			}
+			if err := unstructured.SetNestedSlice(config.machineSet.Object, rawTaints, "spec", "template", "spec", "taints"); err != nil {
+				panic(err)
+			}
+		}
+
+		if !spec.rootIsMachineDeployment && !spec.rootIsMachinePool {
 			config.machineSet.SetAnnotations(spec.annotations)
-		} else {
+		} else if spec.rootIsMachineDeployment {
 			machineSetLabels["machineDeploymentName"] = spec.machineDeploymentName
 
 			machineDeploymentLabels := map[string]string{
@@ -313,20 +356,103 @@ func createTestConfigs(specs ...TestSpec) []*TestConfig {
 					panic(err)
 				}
 			}
-		}
-		config.machineSet.SetLabels(machineSetLabels)
-		if err := unstructured.SetNestedStringMap(config.machineSet.Object, machineSetLabels, "spec", "selector", "matchLabels"); err != nil {
-			panic(err)
+
+			if spec.specTaints != nil {
+				rawTaints := make([]interface{}, len(spec.specTaints))
+				for i, t := range spec.specTaints {
+					rawTaints[i] = t
+				}
+				if err := unstructured.SetNestedSlice(config.machineDeployment.Object, rawTaints, "spec", "template", "spec", "taints"); err != nil {
+					panic(err)
+				}
+			}
+		} else if spec.rootIsMachinePool {
+			config.machinePool = &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"kind":       machinePoolKind,
+					"apiVersion": "cluster.x-k8s.io/v1beta1",
+					"metadata": map[string]interface{}{
+						"name":      spec.machinePoolName,
+						"namespace": spec.namespace,
+						"uid":       spec.machinePoolName,
+					},
+					"spec": map[string]interface{}{
+						"clusterName": spec.clusterName,
+						"replicas":    int64(spec.nodeCount),
+						"template": map[string]interface{}{
+							"spec": map[string]interface{}{
+								"infrastructureRef": map[string]interface{}{
+									"apiGroup": "infrastructure.cluster.x-k8s.io",
+									"kind":     machineTemplateKind,
+									"name":     "TestMachineTemplate",
+								},
+								"metadata": map[string]interface{}{
+									"labels": map[string]interface{}{},
+								},
+							},
+						},
+					},
+					"status": map[string]interface{}{},
+				},
+			}
+			config.machinePool.SetAnnotations(spec.annotations)
+
+			if spec.nodeCount > 0 {
+				providerIDs := make([]interface{}, spec.nodeCount)
+				for j := 0; j < spec.nodeCount; j++ {
+					providerIDs[j] = fmt.Sprintf("test:////%s-%s-nodeid-%d",
+						spec.namespace, spec.machinePoolName, j)
+				}
+				if err := unstructured.SetNestedSlice(
+					config.machinePool.Object,
+					providerIDs,
+					"spec", "providerIDList",
+				); err != nil {
+					panic(err)
+				}
+			}
+
+			if spec.managedLabels != nil {
+				if err := unstructured.SetNestedStringMap(config.machinePool.Object, spec.managedLabels, "spec", "template", "spec", "metadata", "labels"); err != nil {
+					panic(err)
+				}
+			}
+
+			if spec.specTaints != nil {
+				rawTaints := make([]interface{}, len(spec.specTaints))
+				for i, t := range spec.specTaints {
+					rawTaints[i] = t
+				}
+				if err := unstructured.SetNestedSlice(config.machinePool.Object, rawTaints, "spec", "template", "spec", "taints"); err != nil {
+					panic(err)
+				}
+			}
 		}
 
-		machineOwner := metav1.OwnerReference{
-			Name: config.machineSet.GetName(),
-			Kind: config.machineSet.GetKind(),
-			UID:  config.machineSet.GetUID(),
+		if !spec.rootIsMachinePool {
+			config.machineSet.SetLabels(machineSetLabels)
+			if err := unstructured.SetNestedStringMap(config.machineSet.Object, machineSetLabels, "spec", "selector", "matchLabels"); err != nil {
+				panic(err)
+			}
 		}
 
-		if spec.capacity != nil {
-			klog.V(4).Infof("adding capacity to machine template")
+		var machineOwner metav1.OwnerReference
+		if spec.rootIsMachinePool {
+			machineOwner = metav1.OwnerReference{
+				Name: config.machinePool.GetName(),
+				Kind: config.machinePool.GetKind(),
+				UID:  config.machinePool.GetUID(),
+			}
+		} else {
+			machineOwner = metav1.OwnerReference{
+				Name: config.machineSet.GetName(),
+				Kind: config.machineSet.GetKind(),
+				UID:  config.machineSet.GetUID(),
+			}
+		}
+
+		if spec.capacity != nil || spec.nodeInfo != nil {
+			klog.V(4).Infof("creating machine template")
 			config.machineTemplate = &unstructured.Unstructured{
 				Object: map[string]interface{}{
 					"apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
@@ -338,11 +464,23 @@ func createTestConfigs(specs ...TestSpec) []*TestConfig {
 					},
 				},
 			}
+		}
+		if spec.capacity != nil {
+			klog.V(4).Infof("adding capacity to machine template")
 			if err := unstructured.SetNestedStringMap(config.machineTemplate.Object, spec.capacity, "status", "capacity"); err != nil {
 				panic(err)
 			}
 		} else {
 			klog.V(4).Infof("not adding capacity")
+		}
+
+		if spec.nodeInfo != nil {
+			klog.V(4).Infof("adding node info")
+			if err := unstructured.SetNestedStringMap(config.machineTemplate.Object, spec.nodeInfo, "status", "nodeInfo"); err != nil {
+				panic(err)
+			}
+		} else {
+			klog.V(4).Infof("not adding node info")
 		}
 
 		for j := 0; j < spec.nodeCount; j++ {
@@ -359,7 +497,9 @@ func createTestConfigs(specs ...TestSpec) []*TestConfig {
 type TestSpec struct {
 	annotations             map[string]string
 	capacity                map[string]string
+	nodeInfo                map[string]string
 	managedLabels           map[string]string
+	specTaints              []map[string]interface{}
 	machineDeploymentName   string
 	machineSetName          string
 	machinePoolName         string
@@ -367,29 +507,59 @@ type TestSpec struct {
 	namespace               string
 	nodeCount               int
 	rootIsMachineDeployment bool
+	rootIsMachinePool       bool
 }
 
-func createTestSpecs(namespace, clusterName, namePrefix string, scalableResourceCount, nodeCount int, isMachineDeployment bool, annotations map[string]string, capacity map[string]string, managedLabels map[string]string) []TestSpec {
+func createTestSpecs(
+	namespace string,
+	clusterName string,
+	namePrefix string,
+	scalableResourceCount int,
+	nodeCount int,
+	isMachineDeployment bool,
+	isMachinePool bool,
+	annotations map[string]string,
+	capacity map[string]string,
+	nodeInfo map[string]string,
+	managedLabels map[string]string,
+	specTaints []map[string]interface{},
+) []TestSpec {
 	var specs []TestSpec
 
 	for i := 0; i < scalableResourceCount; i++ {
-		specs = append(specs, createTestSpec(namespace, clusterName, fmt.Sprintf("%s-%d", namePrefix, i), nodeCount, isMachineDeployment, annotations, capacity, managedLabels))
+		specs = append(specs, createTestSpec(namespace, clusterName, fmt.Sprintf("%s-%d", namePrefix, i), nodeCount, isMachineDeployment, isMachinePool, annotations, capacity, nodeInfo, managedLabels, specTaints))
 	}
 
 	return specs
 }
 
-func createTestSpec(namespace, clusterName, name string, nodeCount int, isMachineDeployment bool, annotations map[string]string, capacity map[string]string, managedLabels map[string]string) TestSpec {
+func createTestSpec(
+	namespace string,
+	clusterName string,
+	name string,
+	nodeCount int,
+	isMachineDeployment bool,
+	isMachinePool bool,
+	annotations map[string]string,
+	capacity map[string]string,
+	nodeInfo map[string]string,
+	managedLabels map[string]string,
+	specTaints []map[string]interface{},
+) TestSpec {
 	return TestSpec{
 		annotations:             annotations,
 		capacity:                capacity,
 		managedLabels:           managedLabels,
+		specTaints:              specTaints,
 		machineDeploymentName:   name,
 		machineSetName:          name,
+		machinePoolName:         name,
 		clusterName:             clusterName,
 		namespace:               namespace,
 		nodeCount:               nodeCount,
 		rootIsMachineDeployment: isMachineDeployment,
+		rootIsMachinePool:       isMachinePool,
+		nodeInfo:                nodeInfo,
 	}
 }
 
@@ -497,6 +667,7 @@ func NewTestMachineController(t testing.TB) *testMachineController {
 					APIResources: []metav1.APIResource{
 						{
 							Name: "machinetemplates",
+							Kind: machineTemplateKind,
 						},
 					},
 				},

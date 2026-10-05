@@ -18,13 +18,10 @@ package azure
 
 import (
 	"errors"
-	"net/http"
 	"testing"
 
-	"github.com/Azure/go-autorest/autorest/azure"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/stretchr/testify/assert"
-	"sigs.k8s.io/cloud-provider-azure/pkg/consts"
-	"sigs.k8s.io/cloud-provider-azure/pkg/retry"
 )
 
 func TestShouldForceDelete(t *testing.T) {
@@ -54,25 +51,17 @@ func TestShouldForceDelete(t *testing.T) {
 
 func TestIsOperationNotAllowed(t *testing.T) {
 	t.Run("should return false because it's not OperationNotAllowed error", func(t *testing.T) {
-		error := &retry.Error{
-			HTTPStatusCode: http.StatusBadRequest,
-		}
-		assert.Equal(t, isOperationNotAllowed(error), false)
+		err := errors.New("BadRequest: something went wrong")
+		assert.Equal(t, isOperationNotAllowed(err), false)
 	})
 
 	t.Run("should return false because error is nil", func(t *testing.T) {
 		assert.Equal(t, isOperationNotAllowed(nil), false)
 	})
 
-	t.Run("should return true if error is OperationNotAllowed", func(t *testing.T) {
-		sre := &azure.ServiceError{
-			Code:    retry.OperationNotAllowed,
-			Message: "error-message",
-		}
-		error := &retry.Error{
-			RawError: sre,
-		}
-		assert.Equal(t, isOperationNotAllowed(error), false)
+	t.Run("should return true if error contains OperationNotAllowed", func(t *testing.T) {
+		err := errors.New("Code: OperationNotAllowed, Message: error-message")
+		assert.Equal(t, isOperationNotAllowed(err), true)
 	})
 
 	// It is difficult to condition the case where return error matched expected error string for forceDelete and the
@@ -90,20 +79,18 @@ func TestIsOperationPreempted(t *testing.T) {
 		assert.Equal(t, isOperationPreempted(err), false)
 	})
 
-	t.Run("should return true for plain error containing the preempted message", func(t *testing.T) {
-		err := errors.New(consts.OperationPreemptedErrorMessage)
+	t.Run("should return true for azcore.ResponseError with OperationPreempted code", func(t *testing.T) {
+		err := &azcore.ResponseError{ErrorCode: "OperationPreempted"}
 		assert.Equal(t, isOperationPreempted(err), true)
 	})
 
-	t.Run("should return true for a retry.Error wrapping the preempted message", func(t *testing.T) {
-		// This mirrors how the error surfaces in production: WaitForDeleteInstancesResult
-		// returns retry.Error.Error(), which wraps the raw error message.
-		err := retry.NewError(false, errors.New(consts.OperationPreemptedErrorMessage)).Error()
-		assert.Equal(t, isOperationPreempted(err), true)
+	t.Run("should return false for azcore.ResponseError with different code", func(t *testing.T) {
+		err := &azcore.ResponseError{ErrorCode: "SomeOtherError"}
+		assert.Equal(t, isOperationPreempted(err), false)
 	})
 
-	t.Run("should be case-insensitive", func(t *testing.T) {
-		err := errors.New("operation execution has been PREEMPTED by a more recent operation")
+	t.Run("should return true for plain error containing OperationPreempted code", func(t *testing.T) {
+		err := errors.New("Code: OperationPreempted, Message: operation was preempted")
 		assert.Equal(t, isOperationPreempted(err), true)
 	})
 }

@@ -38,10 +38,15 @@ import (
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:path=capacitybuffers,scope=Namespaced,shortName=cb
-// +kubebuilder:printcolumn:name="Strategy",type="string",JSONPath=".spec.provisioningStrategy",description="The strategy used for provisioning buffer capacity."
-// +kubebuilder:printcolumn:name="Replicas",type="integer",JSONPath=".spec.replicas",description="The desired number of buffer chunks, if specified."
-// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].reason",description="The readiness status of the CapacityBuffer."
+// +kubebuilder:printcolumn:name="Strategy",type="string",JSONPath=".spec.provisioningStrategy",description="The strategy to be used."
+// +kubebuilder:printcolumn:name="PodTemplate",type="string",JSONPath=".status.podTemplateRef.name",description="The name of the PodTemplate used."
+// +kubebuilder:printcolumn:name="Replicas",type="integer",JSONPath=".status.replicas",description="The actual number of buffer chunks."
+// +kubebuilder:printcolumn:name="ConditionsType",type="string",JSONPath=".status.conditions[*].type",description="List of all condition types."
+// +kubebuilder:printcolumn:name="ConditionsStatus",type="string",JSONPath=".status.conditions[*].status",description="List of all condition statuses."
+// +kubebuilder:printcolumn:name="ConditionsReason",type="string",JSONPath=".status.conditions[*].reason",description="List of all condition reasons."
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp",description="The age of the CapacityBuffer."
+// +versionName=v1alpha1
+// +kubebuilder:deprecatedversion
 // +k8s:openapi-gen=true
 
 // CapacityBuffer is the configuration that an autoscaler can use to provision buffer capacity within a cluster.
@@ -121,9 +126,10 @@ type CapacityBufferSpec struct {
 	ScalableRef *ScalableRef `json:"scalableRef,omitempty" protobuf:"bytes,3,opt,name=scalableRef"`
 
 	// Replicas defines the desired number of buffer chunks to provision.
-	// If neither `replicas` nor `percentage` is set, as many chunks as fit within
-	// defined resource limits (if any) will be created. If both are set, the maximum
-	// of the two will be used.
+	// The desired number is determined by taking the maximum of `replicas` and
+	// the computed replicas from `percentage` (whichever are defined), and is then capped
+	// by the defined resource `limits` (if defined). If neither `replicas` nor `percentage`
+	// is set, as many chunks as fit within the `limits` will be created.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:ExclusiveMinimum=false
@@ -131,7 +137,7 @@ type CapacityBufferSpec struct {
 
 	// Percentage defines the desired buffer capacity as a percentage of the
 	// `scalableRef`'s current replicas. This is only applicable if `scalableRef` is set.
-	// The absolute number of replicas is calculated from the percentage by rounding up to a minimum of 1.
+	// The absolute number of replicas is calculated from the percentage by rounding up to the nearest integer.
 	// For example, if `scalableRef` has 10 replicas and `percentage` is 20, 2 buffer chunks will be created.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
@@ -154,7 +160,8 @@ type CapacityBufferStatus struct {
 	// +optional
 	PodTemplateRef *LocalObjectRef `json:"podTemplateRef,omitempty" protobuf:"bytes,1,opt,name=podTemplateRef"`
 
-	// Replicas is the actual number of buffer chunks currently provisioned.
+	// Replicas is the final desired number of buffer chunks after processing
+	// .spec.replicas, .spec.percentage and .spec.limits.
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty" protobuf:"varint,2,opt,name=replicas"`
 

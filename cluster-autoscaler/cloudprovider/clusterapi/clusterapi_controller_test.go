@@ -746,7 +746,7 @@ func TestControllerNodeGroupsNodeCount(t *testing.T) {
 		}
 
 		for i := range nodegroups {
-			nodes, err := nodegroups[i].Nodes()
+			nodes, err := nodegroups[i].Nodes(context.Background())
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -873,7 +873,7 @@ func TestControllerMachineSetNodeNamesWithoutLinkage(t *testing.T) {
 	}
 
 	ng := nodegroups[0]
-	nodeNames, err := ng.Nodes()
+	nodeNames, err := ng.Nodes(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -915,7 +915,7 @@ func TestControllerMachineSetNodeNamesUsingProviderID(t *testing.T) {
 	}
 
 	ng := nodegroups[0]
-	nodeNames, err := ng.Nodes()
+	nodeNames, err := ng.Nodes(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -971,7 +971,7 @@ func TestControllerMachineSetNodeNamesUsingStatusNodeRefName(t *testing.T) {
 		t.Fatalf("expected 1 nodegroup, got %d", l)
 	}
 
-	nodeNames, err := nodegroups[0].Nodes()
+	nodeNames, err := nodegroups[0].Nodes(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1151,6 +1151,86 @@ func TestGetAPIGroupPreferredVersion(t *testing.T) {
 	}
 }
 
+func TestGetKindPreferredVersion(t *testing.T) {
+	const infraGroup = "infrastructure.cluster.x-k8s.io"
+	const nutanixKind = "NutanixMachineTemplate"
+	const awsKind = "AWSMachineTemplate"
+
+	testCases := []struct {
+		description     string
+		apiGroup        string
+		kind            string
+		expectedVersion string
+		error           bool
+	}{
+		{
+			description:     "kind exists only in v1beta1",
+			apiGroup:        infraGroup,
+			kind:            nutanixKind,
+			expectedVersion: "v1beta1",
+			error:           false,
+		},
+		{
+			description:     "kind exists in both versions, returns highest priority",
+			apiGroup:        infraGroup,
+			kind:            awsKind,
+			expectedVersion: "v1beta2",
+			error:           false,
+		},
+		{
+			description:     "kind does not exist in any version",
+			apiGroup:        infraGroup,
+			kind:            "NonExistentTemplate",
+			expectedVersion: "",
+			error:           true,
+		},
+		{
+			description:     "group does not exist",
+			apiGroup:        "does.not.exist",
+			kind:            nutanixKind,
+			expectedVersion: "",
+			error:           true,
+		},
+	}
+
+	// v1beta2 only has AWSMachineTemplate; v1beta1 has both.
+	// FakeDiscovery.ServerGroups() builds group.Versions by appending in Resources
+	// slice order, so listing v1beta2 first makes it the higher-priority version
+	// for infraGroup. getKindPreferredVersion iterates group.Versions in order,
+	// so it returns v1beta2 for kinds available in both versions.
+	discoveryClient := &fakediscovery.FakeDiscovery{
+		Fake: &clientgotesting.Fake{
+			Resources: []*metav1.APIResourceList{
+				{
+					GroupVersion: fmt.Sprintf("%s/v1beta2", infraGroup),
+					APIResources: []metav1.APIResource{
+						{Kind: awsKind},
+					},
+				},
+				{
+					GroupVersion: fmt.Sprintf("%s/v1beta1", infraGroup),
+					APIResources: []metav1.APIResource{
+						{Kind: nutanixKind},
+						{Kind: awsKind},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			version, err := getKindPreferredVersion(discoveryClient, tc.apiGroup, tc.kind)
+			if (err != nil) != tc.error {
+				t.Errorf("expected to have error: %t. Had an error: %t", tc.error, err != nil)
+			}
+			if version != tc.expectedVersion {
+				t.Errorf("expected %v, got: %v", tc.expectedVersion, version)
+			}
+		})
+	}
+}
+
 func TestGroupVersionHasResource(t *testing.T) {
 	testCases := []struct {
 		description  string
@@ -1282,21 +1362,21 @@ func TestMachineKeyFromFailedProviderID(t *testing.T) {
 func Test_machineController_allowedByAutoDiscoverySpecs(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
-		testSpec           TestSpec
+		testConfig         *TestConfig
 		autoDiscoverySpecs []*clusterAPIAutoDiscoveryConfig
 		additionalLabels   map[string]string
 		shouldMatch        bool
 	}{{
-		name:     "autodiscovery specs includes permissive spec that should match any MachineSet",
-		testSpec: createTestSpec(RandomString(6), RandomString(6), RandomString(6), 1, false, nil, nil, map[string]string{}),
+		name:       "autodiscovery specs includes permissive spec that should match any MachineSet",
+		testConfig: NewTestConfigBuilder().ForMachineSet().WithNodeCount(1).Build(),
 		autoDiscoverySpecs: []*clusterAPIAutoDiscoveryConfig{
 			{labelSelector: labels.NewSelector()},
 			{clusterName: "foo", namespace: "bar", labelSelector: labels.Nothing()},
 		},
 		shouldMatch: true,
 	}, {
-		name:     "autodiscovery specs includes permissive spec that should match any MachineDeployment",
-		testSpec: createTestSpec(RandomString(6), RandomString(6), RandomString(6), 1, true, nil, nil, map[string]string{}),
+		name:       "autodiscovery specs includes permissive spec that should match any MachineDeployment",
+		testConfig: NewTestConfigBuilder().ForMachineDeployment().WithNodeCount(1).Build(),
 		autoDiscoverySpecs: []*clusterAPIAutoDiscoveryConfig{
 			{labelSelector: labels.NewSelector()},
 			{clusterName: "foo", namespace: "bar", labelSelector: labels.Nothing()},
@@ -1304,7 +1384,7 @@ func Test_machineController_allowedByAutoDiscoverySpecs(t *testing.T) {
 		shouldMatch: true,
 	}, {
 		name:             "autodiscovery specs includes a restrictive spec that should match specific MachineSet",
-		testSpec:         createTestSpec("default", "foo", RandomString(6), 1, false, nil, nil, map[string]string{}),
+		testConfig:       NewTestConfigBuilder().ForMachineSet().WithNamespace("default").WithClusterName("foo").WithNodeCount(1).Build(),
 		additionalLabels: map[string]string{"color": "green"},
 		autoDiscoverySpecs: []*clusterAPIAutoDiscoveryConfig{
 			{clusterName: "foo", namespace: "default", labelSelector: labels.SelectorFromSet(labels.Set{"color": "green"})},
@@ -1313,7 +1393,7 @@ func Test_machineController_allowedByAutoDiscoverySpecs(t *testing.T) {
 		shouldMatch: true,
 	}, {
 		name:             "autodiscovery specs includes a restrictive spec that should match specific MachineDeployment",
-		testSpec:         createTestSpec("default", "foo", RandomString(6), 1, true, nil, nil, map[string]string{}),
+		testConfig:       NewTestConfigBuilder().ForMachineDeployment().WithNamespace("default").WithClusterName("foo").WithNodeCount(1).Build(),
 		additionalLabels: map[string]string{"color": "green"},
 		autoDiscoverySpecs: []*clusterAPIAutoDiscoveryConfig{
 			{clusterName: "foo", namespace: "default", labelSelector: labels.SelectorFromSet(labels.Set{"color": "green"})},
@@ -1322,7 +1402,7 @@ func Test_machineController_allowedByAutoDiscoverySpecs(t *testing.T) {
 		shouldMatch: true,
 	}, {
 		name:             "autodiscovery specs does not include any specs that should match specific MachineSet",
-		testSpec:         createTestSpec("default", "foo", RandomString(6), 1, false, nil, nil, map[string]string{}),
+		testConfig:       NewTestConfigBuilder().ForMachineSet().WithNamespace("default").WithClusterName("foo").WithNodeCount(1).Build(),
 		additionalLabels: map[string]string{"color": "green"},
 		autoDiscoverySpecs: []*clusterAPIAutoDiscoveryConfig{
 			{clusterName: "test", namespace: "default", labelSelector: labels.SelectorFromSet(labels.Set{"color": "blue"})},
@@ -1331,7 +1411,7 @@ func Test_machineController_allowedByAutoDiscoverySpecs(t *testing.T) {
 		shouldMatch: false,
 	}, {
 		name:             "autodiscovery specs does not include any specs that should match specific MachineDeployment",
-		testSpec:         createTestSpec("default", "foo", RandomString(6), 1, true, nil, nil, map[string]string{}),
+		testConfig:       NewTestConfigBuilder().ForMachineDeployment().WithNamespace("default").WithClusterName("foo").WithNodeCount(1).Build(),
 		additionalLabels: map[string]string{"color": "green"},
 		autoDiscoverySpecs: []*clusterAPIAutoDiscoveryConfig{
 			{clusterName: "test", namespace: "default", labelSelector: labels.SelectorFromSet(labels.Set{"color": "blue"})},
@@ -1340,10 +1420,9 @@ func Test_machineController_allowedByAutoDiscoverySpecs(t *testing.T) {
 		shouldMatch: false,
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
-			testConfigs := createTestConfigs(tc.testSpec)
-			resource := testConfigs[0].machineSet
-			if tc.testSpec.rootIsMachineDeployment {
-				resource = testConfigs[0].machineDeployment
+			resource := tc.testConfig.machineSet
+			if tc.testConfig.machineDeployment != nil {
+				resource = tc.testConfig.machineDeployment
 			}
 			if tc.additionalLabels != nil {
 				resource.SetLabels(labels.Merge(resource.GetLabels(), tc.additionalLabels))

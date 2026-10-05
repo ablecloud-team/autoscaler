@@ -20,8 +20,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	apiv1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/test"
 )
 
 type ResourcesAsResourceListTestCase struct {
@@ -30,7 +32,7 @@ type ResourcesAsResourceListTestCase struct {
 	humanize     bool
 	roundCPU     int
 	roundMemory  int
-	resourceList apiv1.ResourceList
+	resourceList corev1.ResourceList
 }
 
 func TestResourcesAsResourceList(t *testing.T) {
@@ -44,9 +46,9 @@ func TestResourcesAsResourceList(t *testing.T) {
 			humanize:    false,
 			roundCPU:    1,
 			roundMemory: 1,
-			resourceList: apiv1.ResourceList{
-				apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
-				apiv1.ResourceMemory: *resource.NewQuantity(1024, resource.BinarySI),
+			resourceList: corev1.ResourceList{
+				corev1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
+				corev1.ResourceMemory: *resource.NewQuantity(1024, resource.BinarySI),
 			},
 		},
 		{
@@ -58,9 +60,9 @@ func TestResourcesAsResourceList(t *testing.T) {
 			humanize:    true,
 			roundCPU:    1,
 			roundMemory: 1,
-			resourceList: apiv1.ResourceList{
-				apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
-				apiv1.ResourceMemory: resource.MustParse("250.00Mi"),
+			resourceList: corev1.ResourceList{
+				corev1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
+				corev1.ResourceMemory: resource.MustParse("250.00Mi"),
 			},
 		},
 		{
@@ -72,9 +74,9 @@ func TestResourcesAsResourceList(t *testing.T) {
 			humanize:    true,
 			roundCPU:    1,
 			roundMemory: 268435456,
-			resourceList: apiv1.ResourceList{
-				apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
-				apiv1.ResourceMemory: resource.MustParse("256.00Mi"),
+			resourceList: corev1.ResourceList{
+				corev1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
+				corev1.ResourceMemory: resource.MustParse("256.00Mi"),
 			},
 		},
 		{
@@ -86,9 +88,9 @@ func TestResourcesAsResourceList(t *testing.T) {
 			humanize:    true,
 			roundCPU:    3,
 			roundMemory: 1,
-			resourceList: apiv1.ResourceList{
-				apiv1.ResourceCPU:    *resource.NewMilliQuantity(1002, resource.DecimalSI),
-				apiv1.ResourceMemory: resource.MustParse("800.61Mi"),
+			resourceList: corev1.ResourceList{
+				corev1.ResourceCPU:    *resource.NewMilliQuantity(1002, resource.DecimalSI),
+				corev1.ResourceMemory: resource.MustParse("800.61Mi"),
 			},
 		},
 		{
@@ -100,9 +102,9 @@ func TestResourcesAsResourceList(t *testing.T) {
 			humanize:    false,
 			roundCPU:    2,
 			roundMemory: 1,
-			resourceList: apiv1.ResourceList{
-				apiv1.ResourceCPU:    *resource.NewMilliQuantity(0, resource.DecimalSI),
-				apiv1.ResourceMemory: *resource.NewQuantity(0, resource.BinarySI),
+			resourceList: corev1.ResourceList{
+				corev1.ResourceCPU:    *resource.NewMilliQuantity(0, resource.DecimalSI),
+				corev1.ResourceMemory: *resource.NewQuantity(0, resource.BinarySI),
 			},
 		},
 		{
@@ -114,9 +116,9 @@ func TestResourcesAsResourceList(t *testing.T) {
 			humanize:    false,
 			roundCPU:    13,
 			roundMemory: 1,
-			resourceList: apiv1.ResourceList{
-				apiv1.ResourceCPU:    *resource.NewMilliQuantity(1231243, resource.DecimalSI),
-				apiv1.ResourceMemory: *resource.NewQuantity(839500000, resource.BinarySI),
+			resourceList: corev1.ResourceList{
+				corev1.ResourceCPU:    *resource.NewMilliQuantity(1231243, resource.DecimalSI),
+				corev1.ResourceMemory: *resource.NewQuantity(839500000, resource.BinarySI),
 			},
 		},
 		{
@@ -128,21 +130,16 @@ func TestResourcesAsResourceList(t *testing.T) {
 			humanize:    false,
 			roundCPU:    13,
 			roundMemory: 134217728,
-			resourceList: apiv1.ResourceList{
-				apiv1.ResourceCPU:    *resource.NewMilliQuantity(1231243, resource.DecimalSI),
-				apiv1.ResourceMemory: resource.MustParse("896Mi"),
+			resourceList: corev1.ResourceList{
+				corev1.ResourceCPU:    *resource.NewMilliQuantity(1231243, resource.DecimalSI),
+				corev1.ResourceMemory: resource.MustParse("896Mi"),
 			},
 		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			result := ResourcesAsResourceList(tc.resources, tc.humanize, tc.roundCPU, tc.roundMemory)
-			if !result[apiv1.ResourceCPU].Equal(tc.resourceList[apiv1.ResourceCPU]) {
-				t.Errorf("expected %v, got %v", tc.resourceList[apiv1.ResourceCPU], result[apiv1.ResourceCPU])
-			}
-			if !result[apiv1.ResourceMemory].Equal(tc.resourceList[apiv1.ResourceMemory]) {
-				t.Errorf("expected %v, got %v", tc.resourceList[apiv1.ResourceMemory], result[apiv1.ResourceMemory])
-			}
+			test.AssertResourceListEqual(t, "resources", tc.resourceList, result)
 		})
 	}
 }
@@ -657,7 +654,7 @@ func TestScaleResource(t *testing.T) {
 
 type ResourceNamesApiToModelTestCase struct {
 	name           string
-	apiResources   []apiv1.ResourceName
+	apiResources   []corev1.ResourceName
 	modelResources []ResourceName
 }
 
@@ -665,9 +662,9 @@ func TestResourceNamesApiToModel(t *testing.T) {
 	tc := []ResourceNamesApiToModelTestCase{
 		{
 			name: "should get cpu and memory",
-			apiResources: []apiv1.ResourceName{
-				apiv1.ResourceCPU,
-				apiv1.ResourceMemory,
+			apiResources: []corev1.ResourceName{
+				corev1.ResourceCPU,
+				corev1.ResourceMemory,
 			},
 			modelResources: []ResourceName{
 				ResourceCPU,
@@ -676,8 +673,8 @@ func TestResourceNamesApiToModel(t *testing.T) {
 		},
 		{
 			name: "should get cpu",
-			apiResources: []apiv1.ResourceName{
-				apiv1.ResourceCPU,
+			apiResources: []corev1.ResourceName{
+				corev1.ResourceCPU,
 			},
 			modelResources: []ResourceName{
 				ResourceCPU,
@@ -685,8 +682,8 @@ func TestResourceNamesApiToModel(t *testing.T) {
 		},
 		{
 			name: "should get memory",
-			apiResources: []apiv1.ResourceName{
-				apiv1.ResourceMemory,
+			apiResources: []corev1.ResourceName{
+				corev1.ResourceMemory,
 			},
 			modelResources: []ResourceName{
 				ResourceMemory,
@@ -694,7 +691,7 @@ func TestResourceNamesApiToModel(t *testing.T) {
 		},
 		{
 			name:           "should get empty",
-			apiResources:   []apiv1.ResourceName{},
+			apiResources:   []corev1.ResourceName{},
 			modelResources: []ResourceName{},
 		},
 	}

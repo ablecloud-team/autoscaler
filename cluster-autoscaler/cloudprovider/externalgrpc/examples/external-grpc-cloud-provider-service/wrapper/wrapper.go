@@ -19,7 +19,7 @@ package wrapper
 import (
 	"context"
 	"fmt"
-	"reflect"
+
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -29,10 +29,10 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/externalgrpc/protos"
-	"k8s.io/autoscaler/cluster-autoscaler/config"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/config"
 )
 
 // Wrapper implements protos.CloudProviderServer.
@@ -67,9 +67,9 @@ func apiv1Node(pbNode *protos.ExternalGrpcNode) *apiv1.Node {
 func pbNodeGroup(ng cloudprovider.NodeGroup) *protos.NodeGroup {
 	return &protos.NodeGroup{
 		Id:      ng.Id(),
-		MaxSize: int32(ng.MaxSize()),
-		MinSize: int32(ng.MinSize()),
-		Debug:   ng.Debug(),
+		MaxSize: int32(ng.MaxSize(context.TODO())),
+		MinSize: int32(ng.MinSize(context.TODO())),
+		Debug:   ng.Debug(context.TODO()),
 	}
 }
 
@@ -82,7 +82,7 @@ func (w *Wrapper) NodeGroups(_ context.Context, req *protos.NodeGroupsRequest) (
 	debug(req)
 
 	pbNgs := make([]*protos.NodeGroup, 0)
-	for _, ng := range w.provider.NodeGroups() {
+	for _, ng := range w.provider.NodeGroups(context.TODO()) {
 		pbNgs = append(pbNgs, pbNodeGroup(ng))
 	}
 	return &protos.NodeGroupsResponse{
@@ -99,12 +99,12 @@ func (w *Wrapper) NodeGroupForNode(_ context.Context, req *protos.NodeGroupForNo
 		return nil, fmt.Errorf("request fields were nil")
 	}
 	node := apiv1Node(pbNode)
-	ng, err := w.provider.NodeGroupForNode(node)
+	ng, err := w.provider.NodeGroupForNode(context.TODO(), node)
 	if err != nil {
 		return nil, err
 	}
 	// Checks if ng is nil interface or contains nil value
-	if ng == nil || reflect.ValueOf(ng).IsNil() {
+	if ng == nil {
 		return &protos.NodeGroupForNodeResponse{
 			NodeGroup: &protos.NodeGroup{}, // NodeGroup with id = "", meaning the node should not be processed by cluster autoscaler
 		}, nil
@@ -118,7 +118,7 @@ func (w *Wrapper) NodeGroupForNode(_ context.Context, req *protos.NodeGroupForNo
 func (w *Wrapper) PricingNodePrice(_ context.Context, req *protos.PricingNodePriceRequest) (*protos.PricingNodePriceResponse, error) {
 	debug(req)
 
-	model, err := w.provider.Pricing()
+	model, err := w.provider.Pricing(context.TODO())
 	if err != nil {
 		if err == cloudprovider.ErrNotImplemented {
 			return nil, status.Error(codes.Unimplemented, err.Error())
@@ -131,24 +131,17 @@ func (w *Wrapper) PricingNodePrice(_ context.Context, req *protos.PricingNodePri
 	if startTimestamp := req.GetStartTimestamp(); startTimestamp != nil {
 		// read standard protobuf timestamp if set
 		reqStartTime = &metav1.Time{Time: startTimestamp.AsTime()}
-	} else {
-		// otherwise fallback to reading metav1.Time
-		reqStartTime = req.GetStartTime()
 	}
-
 	var reqEndTime *metav1.Time
 	if endTimestamp := req.GetEndTimestamp(); endTimestamp != nil {
 		// read standard protobuf timestamp if set
 		reqEndTime = &metav1.Time{Time: endTimestamp.AsTime()}
-	} else {
-		// otherwise fallback to reading metav1.Time
-		reqEndTime = req.GetEndTime()
 	}
 
 	if reqNode == nil || reqStartTime == nil || reqEndTime == nil {
 		return nil, fmt.Errorf("request fields were nil")
 	}
-	price, nodePriceErr := model.NodePrice(apiv1Node(reqNode), reqStartTime.Time, reqEndTime.Time)
+	price, nodePriceErr := model.NodePrice(context.TODO(), apiv1Node(reqNode), reqStartTime.Time, reqEndTime.Time)
 	if nodePriceErr != nil {
 		return nil, nodePriceErr
 	}
@@ -161,7 +154,7 @@ func (w *Wrapper) PricingNodePrice(_ context.Context, req *protos.PricingNodePri
 func (w *Wrapper) PricingPodPrice(_ context.Context, req *protos.PricingPodPriceRequest) (*protos.PricingPodPriceResponse, error) {
 	debug(req)
 
-	model, err := w.provider.Pricing()
+	model, err := w.provider.Pricing(context.TODO())
 	if err != nil {
 		if err == cloudprovider.ErrNotImplemented {
 			return nil, status.Error(codes.Unimplemented, err.Error())
@@ -177,33 +170,24 @@ func (w *Wrapper) PricingPodPrice(_ context.Context, req *protos.PricingPodPrice
 			return nil, err
 		}
 		reqPod = pod
-	} else {
-		// otherwise fallback to reading inlined pod
-		reqPod = req.GetPod()
 	}
 
 	var reqStartTime *metav1.Time
 	if startTimestamp := req.GetStartTimestamp(); startTimestamp != nil {
 		// read standard protobuf timestamp if set
 		reqStartTime = &metav1.Time{Time: startTimestamp.AsTime()}
-	} else {
-		// otherwise fallback to reading metav1.Time
-		reqStartTime = req.GetStartTime()
 	}
 
 	var reqEndTime *metav1.Time
 	if endTimestamp := req.GetEndTimestamp(); endTimestamp != nil {
 		// read standard protobuf timestamp if set
 		reqEndTime = &metav1.Time{Time: endTimestamp.AsTime()}
-	} else {
-		// otherwise fallback to reading metav1.Time
-		reqEndTime = req.GetEndTime()
 	}
 
 	if reqPod == nil || reqStartTime == nil || reqEndTime == nil {
 		return nil, fmt.Errorf("request fields were nil")
 	}
-	price, podPriceErr := model.PodPrice(reqPod, reqStartTime.Time, reqEndTime.Time)
+	price, podPriceErr := model.PodPrice(context.TODO(), reqPod, reqStartTime.Time, reqEndTime.Time)
 	if podPriceErr != nil {
 		return nil, podPriceErr
 	}
@@ -216,7 +200,7 @@ func (w *Wrapper) PricingPodPrice(_ context.Context, req *protos.PricingPodPrice
 func (w *Wrapper) GPULabel(_ context.Context, req *protos.GPULabelRequest) (*protos.GPULabelResponse, error) {
 	debug(req)
 
-	label := w.provider.GPULabel()
+	label := w.provider.GPULabel(context.TODO())
 	return &protos.GPULabelResponse{
 		Label: label,
 	}, nil
@@ -226,7 +210,7 @@ func (w *Wrapper) GPULabel(_ context.Context, req *protos.GPULabelRequest) (*pro
 func (w *Wrapper) GetAvailableGPUTypes(_ context.Context, req *protos.GetAvailableGPUTypesRequest) (*protos.GetAvailableGPUTypesResponse, error) {
 	debug(req)
 
-	types := w.provider.GetAvailableGPUTypes()
+	types := w.provider.GetAvailableGPUTypes(context.TODO())
 	pbGpuTypes := make(map[string]*anypb.Any)
 	for t := range types {
 		pbGpuTypes[t] = nil
@@ -240,7 +224,7 @@ func (w *Wrapper) GetAvailableGPUTypes(_ context.Context, req *protos.GetAvailab
 func (w *Wrapper) Cleanup(_ context.Context, req *protos.CleanupRequest) (*protos.CleanupResponse, error) {
 	debug(req)
 
-	err := w.provider.Cleanup()
+	err := w.provider.Cleanup(context.TODO())
 	return &protos.CleanupResponse{}, err
 }
 
@@ -248,13 +232,13 @@ func (w *Wrapper) Cleanup(_ context.Context, req *protos.CleanupRequest) (*proto
 func (w *Wrapper) Refresh(_ context.Context, req *protos.RefreshRequest) (*protos.RefreshResponse, error) {
 	debug(req)
 
-	err := w.provider.Refresh()
+	err := w.provider.Refresh(context.TODO())
 	return &protos.RefreshResponse{}, err
 }
 
 // getNodeGroup retrieves the NodeGroup giving its id.
 func (w *Wrapper) getNodeGroup(id string) cloudprovider.NodeGroup {
-	for _, n := range w.provider.NodeGroups() {
+	for _, n := range w.provider.NodeGroups(context.TODO()) {
 		if n.Id() == id {
 			return n
 		}
@@ -271,7 +255,7 @@ func (w *Wrapper) NodeGroupTargetSize(_ context.Context, req *protos.NodeGroupTa
 	if ng == nil {
 		return nil, fmt.Errorf("NodeGroup %q, not found", id)
 	}
-	size, err := ng.TargetSize()
+	size, err := ng.TargetSize(context.TODO())
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +273,7 @@ func (w *Wrapper) NodeGroupIncreaseSize(_ context.Context, req *protos.NodeGroup
 	if ng == nil {
 		return nil, fmt.Errorf("NodeGroup %q, not found", id)
 	}
-	err := ng.IncreaseSize(int(req.GetDelta()))
+	err := ng.IncreaseSize(context.TODO(), int(req.GetDelta()))
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +293,7 @@ func (w *Wrapper) NodeGroupDeleteNodes(_ context.Context, req *protos.NodeGroupD
 	for _, n := range req.GetNodes() {
 		nodes = append(nodes, apiv1Node(n))
 	}
-	err := ng.DeleteNodes(nodes)
+	err := ng.DeleteNodes(context.TODO(), nodes)
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +309,7 @@ func (w *Wrapper) NodeGroupDecreaseTargetSize(_ context.Context, req *protos.Nod
 	if ng == nil {
 		return nil, fmt.Errorf("NodeGroup %q, not found", id)
 	}
-	err := ng.DecreaseTargetSize(int(req.GetDelta()))
+	err := ng.DecreaseTargetSize(context.TODO(), int(req.GetDelta()))
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +325,7 @@ func (w *Wrapper) NodeGroupNodes(_ context.Context, req *protos.NodeGroupNodesRe
 	if ng == nil {
 		return nil, fmt.Errorf("NodeGroup %q, not found", id)
 	}
-	instances, err := ng.Nodes()
+	instances, err := ng.Nodes(context.TODO())
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +367,7 @@ func (w *Wrapper) NodeGroupTemplateNodeInfo(_ context.Context, req *protos.NodeG
 	if ng == nil {
 		return nil, fmt.Errorf("NodeGroup %q, not found", id)
 	}
-	info, err := ng.TemplateNodeInfo()
+	info, err := ng.TemplateNodeInfo(context.TODO())
 	if err != nil {
 		if err == cloudprovider.ErrNotImplemented {
 			return nil, status.Error(codes.Unimplemented, err.Error())
@@ -394,9 +378,18 @@ func (w *Wrapper) NodeGroupTemplateNodeInfo(_ context.Context, req *protos.NodeG
 	if err != nil {
 		return nil, err
 	}
+	var resourceSliceBytes [][]byte
+	for _, resourceSlice := range info.LocalResourceSlices {
+		b, err := resourceSlice.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		resourceSliceBytes = append(resourceSliceBytes, b)
+	}
+
 	return &protos.NodeGroupTemplateNodeInfoResponse{
-		NodeInfo:  info.Node(),
-		NodeBytes: infoBytes,
+		NodeBytes:          infoBytes,
+		ResourceSliceBytes: resourceSliceBytes,
 	}, nil
 }
 
@@ -417,25 +410,21 @@ func (w *Wrapper) NodeGroupGetOptions(_ context.Context, req *protos.NodeGroupAu
 	var scaleDownUnneededTime time.Duration
 	if d := pbDefaults.GetScaleDownUnneededDuration(); d != nil {
 		scaleDownUnneededTime = d.AsDuration()
-	} else {
-		// fall back to deprecated field removed in 1.35
-		scaleDownUnneededTime = pbDefaults.GetScaleDownUnneededTime().Duration
 	}
 
 	var scaleDownUnreadyTime time.Duration
 	if d := pbDefaults.GetScaleDownUnreadyDuration(); d != nil {
 		scaleDownUnreadyTime = d.AsDuration()
-	} else {
-		// fall back to deprecated field removed in 1.35
-		scaleDownUnreadyTime = pbDefaults.GetScaleDownUnreadyTime().Duration
 	}
 
 	var maxNodeProvisionTime time.Duration
 	if d := pbDefaults.GetMaxNodeProvisionDuration(); d != nil {
 		maxNodeProvisionTime = d.AsDuration()
-	} else {
-		// fall back to deprecated field removed in 1.35
-		maxNodeProvisionTime = pbDefaults.GetMaxNodeProvisionTime().Duration
+	}
+
+	var maxNodeStartupTime time.Duration
+	if d := pbDefaults.GetMaxNodeStartupDuration(); d != nil {
+		maxNodeStartupTime = d.AsDuration()
 	}
 
 	defaults := config.NodeGroupAutoscalingOptions{
@@ -446,8 +435,10 @@ func (w *Wrapper) NodeGroupGetOptions(_ context.Context, req *protos.NodeGroupAu
 		MaxNodeProvisionTime:             maxNodeProvisionTime,
 		ZeroOrMaxNodeScaling:             pbDefaults.GetZeroOrMaxNodeScaling(),
 		IgnoreDaemonSetsUtilization:      pbDefaults.GetIgnoreDaemonSetsUtilization(),
+		MaxNodeStartupTime:               maxNodeStartupTime,
+		AllowNonAtomicScaleUpToMax:       pbDefaults.GetAllowNonAtomicScaleUpToMax(),
 	}
-	opts, err := ng.GetOptions(defaults)
+	opts, err := ng.GetOptions(context.TODO(), defaults)
 	if err != nil {
 		if err == cloudprovider.ErrNotImplemented {
 			return nil, status.Error(codes.Unimplemented, err.Error())
@@ -461,20 +452,13 @@ func (w *Wrapper) NodeGroupGetOptions(_ context.Context, req *protos.NodeGroupAu
 		NodeGroupAutoscalingOptions: &protos.NodeGroupAutoscalingOptions{
 			ScaleDownUtilizationThreshold:    opts.ScaleDownUtilizationThreshold,
 			ScaleDownGpuUtilizationThreshold: opts.ScaleDownGpuUtilizationThreshold,
-			ScaleDownUnneededTime: &metav1.Duration{
-				Duration: opts.ScaleDownUnneededTime,
-			},
-			ScaleDownUnreadyTime: &metav1.Duration{
-				Duration: opts.ScaleDownUnreadyTime,
-			},
-			MaxNodeProvisionTime: &metav1.Duration{
-				Duration: opts.MaxNodeProvisionTime,
-			},
-			ScaleDownUnneededDuration:   durationpb.New(opts.ScaleDownUnneededTime),
-			ScaleDownUnreadyDuration:    durationpb.New(opts.ScaleDownUnreadyTime),
-			MaxNodeProvisionDuration:    durationpb.New(opts.MaxNodeProvisionTime),
-			ZeroOrMaxNodeScaling:        opts.ZeroOrMaxNodeScaling,
-			IgnoreDaemonSetsUtilization: opts.IgnoreDaemonSetsUtilization,
+			ScaleDownUnneededDuration:        durationpb.New(opts.ScaleDownUnneededTime),
+			ScaleDownUnreadyDuration:         durationpb.New(opts.ScaleDownUnreadyTime),
+			MaxNodeProvisionDuration:         durationpb.New(opts.MaxNodeProvisionTime),
+			ZeroOrMaxNodeScaling:             opts.ZeroOrMaxNodeScaling,
+			IgnoreDaemonSetsUtilization:      opts.IgnoreDaemonSetsUtilization,
+			MaxNodeStartupDuration:           durationpb.New(opts.MaxNodeStartupTime),
+			AllowNonAtomicScaleUpToMax:       opts.AllowNonAtomicScaleUpToMax,
 		},
 	}, nil
 }
