@@ -7,6 +7,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: mold-component-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -43,9 +46,12 @@ jobs:
           set -euo pipefail
           mkdir -p cluster-autoscaler/bin
           cp "$RUNNER_TEMP/component/cluster-autoscaler" cluster-autoscaler/bin/
+          TAG="mold-test-${SOURCE_SHA:0:12}-k8s${MINOR}"
+          if gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then echo "Immutable candidate Release already exists" >&2; exit 1; fi
           IMAGE="ghcr.io/${REPOSITORY}:sha-${SOURCE_SHA}-k8s${MINOR}"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u dhslove --password-stdin
           PATCH_HASH=$(sha256sum cluster-autoscaler/cloudprovider/cloudstack/service/client.go | cut -d' ' -f1)
+          if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then echo "Immutable candidate image already exists" >&2; exit 1; fi
           docker build -f cluster-autoscaler/Dockerfile.mold --label org.opencontainers.image.revision="$SOURCE_SHA" --label org.opencontainers.image.source="https://github.com/$REPOSITORY" --label io.ablestack.api-signature=HMAC-SHA256 --label io.ablestack.mold-client-sha256="$PATCH_HASH" -t "$IMAGE" cluster-autoscaler
           docker push "$IMAGE"
           docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE" > "$RUNNER_TEMP/component/image-digest.txt"
