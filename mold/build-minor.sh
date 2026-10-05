@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
-# Licensed under the Apache License, Version 2.0.
+# Copyright The Kubernetes Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 set -euo pipefail
 MINOR=${1:?minor required}
 OUTPUT=${2:?output required}
@@ -9,11 +22,14 @@ import json,sys
 print(json.load(open(sys.argv[1]))[sys.argv[2]]['source_sha'])
 PY
 )
-WORKTREE="$OUTPUT/source-$MINOR"
 mkdir -p "$OUTPUT"
+WORKTREE=$(mktemp -d "$OUTPUT/source-$MINOR.XXXXXX")
 git fetch https://github.com/kubernetes/autoscaler.git "$BASE" --no-tags
-git worktree add --detach "$WORKTREE" "$BASE" >/dev/null
-trap 'git -C "$ROOT" worktree remove --force "$WORKTREE"' EXIT
+# Go's VCS discovery requires a .git directory; a linked worktree .git file
+# omits source metadata even with -buildvcs=true in the pinned toolchain.
+trap 'rm -rf -- "$WORKTREE"' EXIT
+git clone --shared --no-checkout "$ROOT" "$WORKTREE" >/dev/null
+git -C "$WORKTREE" checkout --detach "$BASE" >/dev/null
 SERVICE=cluster-autoscaler/cloudprovider/cloudstack/service
 cp "$ROOT/$SERVICE/client.go" "$ROOT/$SERVICE/mold_signing_test.go" "$WORKTREE/$SERVICE/"
 mkdir -p "$WORKTREE/$SERVICE/testdata"
