@@ -33,8 +33,10 @@ const (
 )
 
 var (
-	nodeIDs = []string{"m1", "vm2"}
+	nodeIDs = []string{"vm1", "vm2"}
 )
+
+func moldControlNode(value bool) *bool { return &value }
 
 func createClusterDetails() *service.Cluster {
 	return &service.Cluster{
@@ -45,19 +47,23 @@ func createClusterDetails() *service.Cluster {
 		WorkerCount: 3,
 		VirtualMachines: []*service.VirtualMachine{
 			{
-				ID: "m1",
+				ID:          "m1",
+				ControlNode: moldControlNode(true),
 			},
 			{
-				ID:   "vm1",
-				Name: "vm1",
+				ID:          "vm1",
+				ControlNode: moldControlNode(false),
+				Name:        "vm1",
 			},
 			{
-				ID:   "vm2",
-				Name: "vm2",
+				ID:          "vm2",
+				ControlNode: moldControlNode(false),
+				Name:        "vm2",
 			},
 			{
-				ID:   "vm3",
-				Name: "vm3",
+				ID:          "vm3",
+				ControlNode: moldControlNode(false),
+				Name:        "vm3",
 			},
 		},
 		VirtualMachineMap: make(map[string]*service.VirtualMachine),
@@ -73,27 +79,33 @@ func createScaleUpClusterDetails() *service.Cluster {
 		WorkerCount: 5,
 		VirtualMachines: []*service.VirtualMachine{
 			{
-				ID: "m1",
+				ID:          "m1",
+				ControlNode: moldControlNode(true),
 			},
 			{
-				ID:   "vm1",
-				Name: "vm1",
+				ID:          "vm1",
+				ControlNode: moldControlNode(false),
+				Name:        "vm1",
 			},
 			{
-				ID:   "vm2",
-				Name: "vm2",
+				ID:          "vm2",
+				ControlNode: moldControlNode(false),
+				Name:        "vm2",
 			},
 			{
-				ID:   "vm3",
-				Name: "vm3",
+				ID:          "vm3",
+				ControlNode: moldControlNode(false),
+				Name:        "vm3",
 			},
 			{
-				ID:   "vm4",
-				Name: "vm4",
+				ID:          "vm4",
+				ControlNode: moldControlNode(false),
+				Name:        "vm4",
 			},
 			{
-				ID:   "vm5",
-				Name: "vm5",
+				ID:          "vm5",
+				ControlNode: moldControlNode(false),
+				Name:        "vm5",
 			},
 		},
 	}
@@ -108,12 +120,9 @@ func createScaleDownClusterDetails() *service.Cluster {
 		WorkerCount: 1,
 		VirtualMachines: []*service.VirtualMachine{
 			{
-				ID:   "vm2",
-				Name: "vm2",
-			},
-			{
-				ID:   "vm3",
-				Name: "vm3",
+				ID:          "vm3",
+				ControlNode: moldControlNode(false),
+				Name:        "vm3",
 			},
 		},
 	}

@@ -69,9 +69,9 @@ func TestNodes(t *testing.T) {
 	clusterDetails := createClusterDetails()
 	asg := createASG()
 	nodes, err := asg.Nodes(context.Background())
-	assert.Equal(t, len(clusterDetails.VirtualMachines), len(nodes))
+	assert.Equal(t, len(clusterDetails.WorkerVirtualMachines()), len(nodes))
 	for i, node := range nodes {
-		assert.Equal(t, clusterDetails.VirtualMachines[i].ID, node.Id)
+		assert.Equal(t, clusterDetails.WorkerVirtualMachines()[i].ID, node.Id)
 	}
 	assert.Equal(t, nil, err)
 }
@@ -146,7 +146,7 @@ func testDeleteNodesError(t *testing.T) {
 		{
 			Status: v1.NodeStatus{
 				NodeInfo: v1.NodeSystemInfo{
-					SystemUUID: "m1",
+					SystemUUID: "vm1",
 				},
 			},
 		},
@@ -183,7 +183,7 @@ func testDeleteNodesSuccess(t *testing.T) {
 		{
 			Status: v1.NodeStatus{
 				NodeInfo: v1.NodeSystemInfo{
-					SystemUUID: "m1",
+					SystemUUID: "vm1",
 				},
 			},
 		},

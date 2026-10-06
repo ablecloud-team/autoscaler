@@ -104,9 +104,7 @@ func testNodeExistsWithName(t *testing.T) {
 
 func testNodeExistsWithoutName(t *testing.T) {
 	node := &v1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "vm1",
-		},
+		Status: v1.NodeStatus{NodeInfo: v1.NodeSystemInfo{SystemUUID: "vm1"}},
 	}
 	asg, err := provider.NodeGroupForNode(context.Background(), node)
 	assert.Equal(t, nil, err)
@@ -121,10 +119,11 @@ func testNodeNotExistWithName(t *testing.T) {
 			Name: "vm5",
 		},
 	}
-	_, err := provider.NodeGroupForNode(context.Background(), node)
+	group, err := provider.NodeGroupForNode(context.Background(), node)
 	fmt.Println(provider.manager.asg.cluster)
 	fmt.Println(err)
-	assert.NotEqual(t, nil, err)
+	assert.NoError(t, err)
+	assert.Nil(t, group)
 }
 
 func testNodeNotExistWithoutName(t *testing.T) {
@@ -135,10 +134,11 @@ func testNodeNotExistWithoutName(t *testing.T) {
 			},
 		},
 	}
-	_, err := provider.NodeGroupForNode(context.Background(), node)
+	group, err := provider.NodeGroupForNode(context.Background(), node)
 	fmt.Println(provider.manager.asg.cluster)
 	fmt.Println(err)
-	assert.NotEqual(t, nil, err)
+	assert.NoError(t, err)
+	assert.Nil(t, group)
 }
 
 func TestNodeGroupForNode(t *testing.T) {
