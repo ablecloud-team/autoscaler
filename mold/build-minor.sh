@@ -32,6 +32,9 @@ git clone --shared --no-checkout "$ROOT" "$WORKTREE" >/dev/null
 git -C "$WORKTREE" checkout --detach "$BASE" >/dev/null
 SERVICE=cluster-autoscaler/cloudprovider/cloudstack/service
 cp "$ROOT/$SERVICE/client.go" "$ROOT/$SERVICE/mold_signing_test.go" "$WORKTREE/$SERVICE/"
+cp "$ROOT/$SERVICE/cks.go" "$ROOT/$SERVICE/mold_worker_identity.go" "$ROOT/$SERVICE/mold_worker_identity_test.go" "$WORKTREE/$SERVICE/"
+python3 "$ROOT/mold/apply-worker-identity.py" "$WORKTREE"
+gofmt -w "$WORKTREE/$SERVICE/cks.go" "$WORKTREE/$SERVICE/mold_worker_identity.go" "$WORKTREE/$SERVICE/mold_worker_identity_test.go" "$WORKTREE/cluster-autoscaler/cloudprovider/cloudstack/cloudstack_node_group.go" "$WORKTREE/cluster-autoscaler/cloudprovider/cloudstack/cloudstack_manager.go"
 mkdir -p "$WORKTREE/$SERVICE/testdata"
 cp "$ROOT/$SERVICE/testdata/mold-signing.json" "$WORKTREE/$SERVICE/testdata/"
 cd "$WORKTREE/cluster-autoscaler"
@@ -43,7 +46,8 @@ python3 - "$ROOT" "$MINOR" "$OUTPUT" <<'PY'
 import json,sys,pathlib,subprocess,hashlib,os
 root=pathlib.Path(sys.argv[1]);minor=sys.argv[2];out=pathlib.Path(sys.argv[3]);base=json.loads((root/'mold/baselines.json').read_text())[minor]
 sha=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
-files=['client.go','mold_signing_test.go','testdata/mold-signing.json']
+files=['client.go','mold_signing_test.go','testdata/mold-signing.json','cks.go','mold_worker_identity.go','mold_worker_identity_test.go']
 patches={name:hashlib.sha256((root/'cluster-autoscaler/cloudprovider/cloudstack/service'/name).read_bytes()).hexdigest() for name in files}
+patches['mold/apply-worker-identity.py']=hashlib.sha256((root/'mold/apply-worker-identity.py').read_bytes()).hexdigest()
 (out/'provenance.json').write_text(json.dumps({'source_repository':os.environ.get('REPOSITORY','dhslove/autoscaler'),'source_sha':sha,'build_run':os.environ.get('RUN_URL','local'),'original_baseline':base['release'],'binary_source_sha':base['source_sha'],'baseline_status':base['status'],'kubernetes_minor':minor,'architecture':'amd64','api_signature':'HMAC-SHA256','customization_files':patches},indent=2)+'\n')
 PY

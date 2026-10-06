@@ -88,33 +88,30 @@ func (asg *asg) DecreaseTargetSize(ctx context.Context, delta int) error {
 
 // Belongs returns true if the given node belongs to the NodeGroup.
 func (asg *asg) Belongs(node *apiv1.Node) (bool, error) {
-	for _, vm := range asg.cluster.VirtualMachines {
-		if vm.Name != "" && node.Name != "" && vm.Name == node.Name {
-			return true, nil
-		}
-		if vm.ID == node.Status.NodeInfo.SystemUUID {
-			return true, nil
-		}
-	}
-	return false, fmt.Errorf("Unable to find node %s in cluster", node.Name)
+	vm := asg.cluster.FindWorkerVM(node.Name, node.Spec.ProviderID, node.Status.NodeInfo.SystemUUID)
+	return vm != nil, nil
 }
 
 // DeleteNodes deletes the nodes from the group.
 func (asg *asg) DeleteNodes(ctx context.Context, nodes []*apiv1.Node) error {
-	if asg.cluster.WorkerCount-len(nodes) < asg.MinSize(context.TODO()) {
-		return fmt.Errorf("Goes below minsize. Can not delete %v nodes", len(nodes))
-	}
-
-	nodeIDs := make([]string, len(nodes))
-	for i, node := range nodes {
-		if vm, ok := asg.cluster.VirtualMachineMap[node.Name]; ok {
-			nodeIDs[i] = vm.ID
-		} else {
-			nodeIDs[i] = node.Status.NodeInfo.SystemUUID
+	nodeIDs := make([]string, 0, len(nodes))
+	seen := make(map[string]bool)
+	for _, node := range nodes {
+		if node == nil {
+			return fmt.Errorf("Cannot delete a nil Kubernetes node")
 		}
+		vm := asg.cluster.FindWorkerVM(node.Name, node.Spec.ProviderID, node.Status.NodeInfo.SystemUUID)
+		if vm == nil || seen[vm.ID] {
+			return fmt.Errorf("Cannot delete unknown, non-worker or duplicate node %s", node.Name)
+		}
+		seen[vm.ID] = true
+		nodeIDs = append(nodeIDs, vm.ID)
 	}
 	if len(nodeIDs) == 0 {
-		return fmt.Errorf("Unable to fetch nodeids from %v", nodes)
+		return fmt.Errorf("No managed worker nodes requested for deletion")
+	}
+	if asg.cluster.WorkerCount-len(nodeIDs) < asg.MinSize(context.TODO()) {
+		return fmt.Errorf("Goes below minsize. Can not delete %v nodes", len(nodeIDs))
 	}
 	cluster, err := asg.manager.removeNodesFromCluster(asg.cluster.ID, nodeIDs...)
 	if err != nil {
@@ -142,11 +139,9 @@ func (asg *asg) Debug(ctx context.Context) string {
 
 // Nodes returns a list of all nodes that belong to this node group.
 func (asg *asg) Nodes(ctx context.Context) ([]cloudprovider.Instance, error) {
-	instances := make([]cloudprovider.Instance, len(asg.cluster.VirtualMachines))
-	for i := 0; i < len(asg.cluster.VirtualMachines); i++ {
-		instances[i] = cloudprovider.Instance{
-			Id: asg.cluster.VirtualMachines[i].ID,
-		}
+	var instances []cloudprovider.Instance
+	for _, vm := range asg.cluster.WorkerVirtualMachines() {
+		instances = append(instances, cloudprovider.Instance{Id: vm.ID})
 	}
 	return instances, nil
 }

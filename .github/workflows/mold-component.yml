@@ -51,8 +51,9 @@ jobs:
           IMAGE="ghcr.io/${REPOSITORY}:sha-${SOURCE_SHA}-k8s${MINOR}"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u dhslove --password-stdin
           PATCH_HASH=$(sha256sum cluster-autoscaler/cloudprovider/cloudstack/service/client.go | cut -d' ' -f1)
+          IDENTITY_HASH=$(sha256sum cluster-autoscaler/cloudprovider/cloudstack/service/mold_worker_identity.go | cut -d' ' -f1)
           if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then echo "Immutable candidate image already exists" >&2; exit 1; fi
-          docker build -f cluster-autoscaler/Dockerfile.mold --label org.opencontainers.image.revision="$SOURCE_SHA" --label org.opencontainers.image.source="https://github.com/$REPOSITORY" --label io.ablestack.api-signature=HMAC-SHA256 --label io.ablestack.mold-client-sha256="$PATCH_HASH" -t "$IMAGE" cluster-autoscaler
+          docker build -f cluster-autoscaler/Dockerfile.mold --label org.opencontainers.image.revision="$SOURCE_SHA" --label org.opencontainers.image.source="https://github.com/$REPOSITORY" --label io.ablestack.api-signature=HMAC-SHA256 --label io.ablestack.mold-client-sha256="$PATCH_HASH" --label io.ablestack.mold-worker-identity-sha256="$IDENTITY_HASH" -t "$IMAGE" cluster-autoscaler
           docker push "$IMAGE"
           docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE" > "$RUNNER_TEMP/component/image-digest.txt"
           docker save "$IMAGE" -o "$RUNNER_TEMP/component/image-amd64.tar"

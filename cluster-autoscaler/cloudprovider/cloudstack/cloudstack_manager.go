@@ -51,9 +51,12 @@ type CSConfig struct {
 }
 
 func (manager *manager) clusterForNode(node *v1.Node) (*asg, error) {
-	_, err := manager.asg.Belongs(node)
+	belongs, err := manager.asg.Belongs(node)
 	if err != nil {
 		return nil, err
+	}
+	if !belongs {
+		return nil, nil
 	}
 	return manager.asg, nil
 }
