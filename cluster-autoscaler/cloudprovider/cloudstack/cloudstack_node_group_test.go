@@ -71,7 +71,7 @@ func TestNodes(t *testing.T) {
 	nodes, err := asg.Nodes(context.Background())
 	assert.Equal(t, len(clusterDetails.WorkerVirtualMachines()), len(nodes))
 	for i, node := range nodes {
-		assert.Equal(t, clusterDetails.WorkerVirtualMachines()[i].ID, node.Id)
+		assert.Equal(t, "external-cloudstack://"+clusterDetails.WorkerVirtualMachines()[i].ID, node.Id)
 	}
 	assert.Equal(t, nil, err)
 }

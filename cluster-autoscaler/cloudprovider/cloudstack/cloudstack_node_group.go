@@ -141,7 +141,7 @@ func (asg *asg) Debug(ctx context.Context) string {
 func (asg *asg) Nodes(ctx context.Context) ([]cloudprovider.Instance, error) {
 	var instances []cloudprovider.Instance
 	for _, vm := range asg.cluster.WorkerVirtualMachines() {
-		instances = append(instances, cloudprovider.Instance{Id: vm.ID})
+		instances = append(instances, cloudprovider.Instance{Id: "external-cloudstack://" + vm.ID})
 	}
 	return instances, nil
 }

@@ -30,7 +30,7 @@ t=method(t,'Belongs',""" vm := asg.cluster.FindWorkerVM(node.Name, node.Spec.Pro
  return vm != nil, nil""")
 t=method(t,'Nodes',""" var instances []cloudprovider.Instance
  for _, vm := range asg.cluster.WorkerVirtualMachines() {
-  instances = append(instances, cloudprovider.Instance{Id: vm.ID})
+  instances = append(instances, cloudprovider.Instance{Id: "external-cloudstack://" + vm.ID})
  }
  return instances, nil""")
 t=method(t,'DeleteNodes',""" nodeIDs := make([]string, 0, len(nodes))
@@ -73,7 +73,7 @@ start=t.index('func testNodeExistsWithoutName(');end=t.index('\n}',start)+2
 part=t[start:end].replace('ObjectMeta: metav1.ObjectMeta{\n\t\t\tName: "vm1",\n\t\t}', 'Status: v1.NodeStatus{NodeInfo: v1.NodeSystemInfo{SystemUUID: "vm1"}}')
 t=t[:start]+part+t[end:];p.write_text(t)
 p=root/'cluster-autoscaler/cloudprovider/cloudstack/cloudstack_node_group_test.go';t=p.read_text()
-t=t.replace('len(clusterDetails.VirtualMachines)', 'len(clusterDetails.WorkerVirtualMachines())').replace('clusterDetails.VirtualMachines[i].ID', 'clusterDetails.WorkerVirtualMachines()[i].ID')
+t=t.replace('len(clusterDetails.VirtualMachines)', 'len(clusterDetails.WorkerVirtualMachines())').replace('clusterDetails.VirtualMachines[i].ID', '"external-cloudstack://"+clusterDetails.WorkerVirtualMachines()[i].ID')
 # Delete workers vm1/vm2, rather than allowing the former control-plane m1 case.
 t=t.replace('SystemUUID: "m1"', 'SystemUUID: "vm1"')
 p.write_text(t)

@@ -38,7 +38,7 @@ func TestMoldRejectNonWorkerDeletion(t *testing.T) {
 
 func TestMoldSyntheticIdentityAndControlExclusion(t *testing.T) {
     asg := createASG()
-    worker, err := asg.manager.clusterForNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "vm2"}})
+    worker, err := asg.manager.clusterForNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "external-cloudstack://vm2"}, Spec: v1.NodeSpec{ProviderID: "external-cloudstack://vm2"}})
     assert.NoError(t, err)
     assert.Same(t, asg, worker)
     group, err := asg.manager.clusterForNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "m1"}})

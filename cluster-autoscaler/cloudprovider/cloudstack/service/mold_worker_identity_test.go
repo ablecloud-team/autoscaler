@@ -40,7 +40,7 @@ func TestMoldWorkerInstancesExcludeOtherRolesAndRemovedVMs(t *testing.T) {
 func TestMoldWorkerIdentityLookup(t *testing.T) {
 	cases := []struct{ name, providerID, systemUUID, want string }{
 		{"worker-name", "", "", "worker-id"}, {"worker-id", "", "", "worker-id"},
-		{"worker-name", "cloudstack://worker-id", "", "worker-id"}, {"worker-name", "worker-id", "", "worker-id"},
+		{"worker-name", "external-cloudstack://worker-id", "", "worker-id"}, {"external-cloudstack://worker-id", "external-cloudstack://worker-id", "", "worker-id"}, {"worker-name", "cloudstack://worker-id", "", "worker-id"}, {"worker-name", "worker-id", "", "worker-id"},
 		{"", "", "WORKER-ID", "worker-id"}, {"starting-name", "", "", "starting-id"},
 		{"control-name", "", "", ""}, {"etcd-name", "", "", ""}, {"external-name", "", "", ""},
 		{"removed-name", "", "", ""}, {"untyped-name", "", "", ""}, {"foreign-node", "", "foreign-id", ""},

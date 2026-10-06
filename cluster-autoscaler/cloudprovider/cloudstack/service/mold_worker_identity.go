@@ -41,7 +41,7 @@ func (cluster *Cluster) WorkerVirtualMachines() []*VirtualMachine {
 // autoscaler core for synthetic cloud instances. An explicit provider ID is
 // authoritative; it never falls back to a matching name after a mismatch.
 func (cluster *Cluster) FindWorkerVM(name, providerID, systemUUID string) *VirtualMachine {
-	identity := strings.TrimPrefix(providerID, "cloudstack://")
+	identity := strings.TrimPrefix(strings.TrimPrefix(providerID, "external-cloudstack://"), "cloudstack://")
 	if providerID != "" && strings.Contains(identity, "://") {
 		return nil
 	}
