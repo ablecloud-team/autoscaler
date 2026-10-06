@@ -55,6 +55,20 @@ p=root/'cluster-autoscaler/cloudprovider/cloudstack/cloudstack_manager.go';t=p.r
 if t.count(old)!=1:raise ValueError('unexpected clusterForNode interface')
 t=t.replace(old,new).replace('\treturn manager.asg, nil','\tif !belongs { return nil, nil }\n\treturn manager.asg, nil');p.write_text(t)
 
+# Do not convert *asg(nil) to a non-nil NodeGroup interface on older minors.
+p=root/'cluster-autoscaler/cloudprovider/cloudstack/cloudstack_cloud_provider.go'
+t=p.read_text()
+pattern=r'(?ms)^(func \(provider \*cloudStackCloudProvider\) NodeGroupForNode\([^\n]+\{)\n.*?^}'
+body="""\n ng, err := provider.manager.clusterForNode(node)
+ if err != nil { return nil, err }
+ if ng == nil { return nil, nil }
+ return ng, nil
+}"""
+t,n=re.subn(pattern,lambda m:m.group(1)+body,t)
+if n!=1: raise ValueError('unexpected NodeGroupForNode interface')
+
+p.write_text(t)
+
 # Adapt the baseline tests to Mold's explicit node-role contract. Keep each
 # minor's API signatures and imports, and still run its complete provider suite.
 p=root/'cluster-autoscaler/cloudprovider/cloudstack/cloudstack_manager_test.go'
@@ -80,5 +94,9 @@ p.write_text(t)
 extra=(pathlib.Path(__file__).resolve().parent/'worker-identity-provider-test.go.tmpl').read_text()
 delete='asg.DeleteNodes(context.Background(), nodes)' if 'DeleteNodes(context.Background(),' in t else 'asg.DeleteNodes(nodes)'
 extra=extra.replace('DELETE_CALL',delete)
+provider=(root/'cluster-autoscaler/cloudprovider/cloudstack/cloudstack_cloud_provider.go').read_text()
+group_call='provider.NodeGroupForNode(context.Background(), node)' if 'NodeGroupForNode(ctx context.Context' in provider else 'provider.NodeGroupForNode(node)'
+extra=extra.replace('GROUP_CALL',group_call)
+
 if 'context.Background()' not in extra:extra=extra.replace('    "context"\n','')
 (root/'cluster-autoscaler/cloudprovider/cloudstack/mold_worker_identity_provider_test.go').write_text(extra)

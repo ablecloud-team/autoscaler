@@ -45,3 +45,21 @@ func TestMoldSyntheticIdentityAndControlExclusion(t *testing.T) {
     assert.NoError(t, err)
     assert.Nil(t, group)
 }
+
+
+// Compare the NodeGroup interface itself: assert.Nil also accepts typed nil,
+// which DRA callers see as a group and dereference through Id().
+func TestMoldUnmanagedNodeGroupIsNilInterface(t *testing.T) {
+    asg := createASG()
+    provider := &cloudStackCloudProvider{manager: asg.manager}
+    for _, name := range []string{"m1", "unknown"} {
+        node := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
+        group, err := GROUP_CALL
+        assert.NoError(t, err)
+        if group != nil { t.Fatalf("unmanaged %s returned non-nil NodeGroup interface: %T", name, group) }
+    }
+    node := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "vm1"}}
+    group, err := GROUP_CALL
+    assert.NoError(t, err)
+    if group == nil { t.Fatal("managed worker returned nil NodeGroup") }
+}
