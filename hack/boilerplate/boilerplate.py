@@ -53,7 +53,11 @@ def get_refs():
         extension = os.path.basename(path).split(".")[1]
 
         with open(path, "r") as ref_file:
-            refs[extension] = ref_file.read().splitlines()
+            reference = ref_file.read()
+            # Scripts and their templates must both ignore the interpreter line.
+            if extension in ("sh", "py"):
+                reference = re.sub(r"^(#!.*\n)\n*", "", reference, count=1)
+            refs[extension] = reference.splitlines()
 
     return refs
 
