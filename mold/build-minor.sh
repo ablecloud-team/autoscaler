@@ -33,6 +33,9 @@ git -C "$WORKTREE" checkout --detach "$BASE" >/dev/null
 SERVICE=cluster-autoscaler/cloudprovider/cloudstack/service
 cp "$ROOT/$SERVICE/client.go" "$ROOT/$SERVICE/mold_signing_test.go" "$WORKTREE/$SERVICE/"
 cp "$ROOT/$SERVICE/cks.go" "$ROOT/$SERVICE/mold_worker_identity.go" "$ROOT/$SERVICE/mold_worker_identity_test.go" "$WORKTREE/$SERVICE/"
+cp "$ROOT/cluster-autoscaler/cloudprovider/cloudstack/cloudstack_option.go" "$ROOT/cluster-autoscaler/cloudprovider/cloudstack/mold_project_config_test.go" "$WORKTREE/cluster-autoscaler/cloudprovider/cloudstack/"
+cp "$ROOT/$SERVICE/mold_project_scope_test.go" "$WORKTREE/$SERVICE/"
+python3 "$ROOT/mold/apply-cloud-config.py" "$WORKTREE"
 python3 "$ROOT/mold/apply-worker-identity.py" "$WORKTREE"
 gofmt -w "$WORKTREE/$SERVICE/cks.go" "$WORKTREE/$SERVICE/mold_worker_identity.go" "$WORKTREE/$SERVICE/mold_worker_identity_test.go" "$WORKTREE/cluster-autoscaler/cloudprovider/cloudstack/cloudstack_node_group.go" "$WORKTREE/cluster-autoscaler/cloudprovider/cloudstack/cloudstack_manager.go" "$WORKTREE/cluster-autoscaler/cloudprovider/cloudstack/"*test.go
 mkdir -p "$WORKTREE/$SERVICE/testdata"
@@ -48,7 +51,7 @@ root=pathlib.Path(sys.argv[1]);minor=sys.argv[2];out=pathlib.Path(sys.argv[3]);b
 sha=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
 files=['client.go','mold_signing_test.go','testdata/mold-signing.json','cks.go','mold_worker_identity.go','mold_worker_identity_test.go']
 patches={name:hashlib.sha256((root/'cluster-autoscaler/cloudprovider/cloudstack/service'/name).read_bytes()).hexdigest() for name in files}
-for name in ['mold/apply-worker-identity.py','mold/worker-identity-provider-test.go.tmpl']:
+for name in ['mold/apply-worker-identity.py','mold/worker-identity-provider-test.go.tmpl','mold/apply-cloud-config.py','cluster-autoscaler/cloudprovider/cloudstack/cloudstack_option.go','cluster-autoscaler/cloudprovider/cloudstack/mold_project_config_test.go','cluster-autoscaler/cloudprovider/cloudstack/service/mold_project_scope_test.go']:
  patches[name]=hashlib.sha256((root/name).read_bytes()).hexdigest()
 (out/'provenance.json').write_text(json.dumps({'source_repository':os.environ.get('REPOSITORY','dhslove/autoscaler'),'source_sha':sha,'build_run':os.environ.get('RUN_URL','local'),'original_baseline':base['release'],'binary_source_sha':base['source_sha'],'baseline_status':base['status'],'kubernetes_minor':minor,'architecture':'amd64','api_signature':'HMAC-SHA256','customization_files':patches},indent=2)+'\n')
 PY

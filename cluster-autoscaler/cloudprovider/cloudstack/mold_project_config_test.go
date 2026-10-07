@@ -24,7 +24,7 @@ import (
 
 func TestCloudConfigProjectIDReachesApiClient(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "cloud-config")
-	body := "[Global]\napi-url=http://127.0.0.1:1/api\napi-key=fixture\nsecret-key=fixture\nproject-id=d629aa4e-eb4a-43fb-abf6-45ad86cae21c\n"
+	body := "[Global]\napi-url=http://127.0.0.1:1/api\napi-key=fixture\nsecret-key=fixture\nproject-id=d629aa4e-eb4a-43fb-abf6-45ad86cae21c\ncluster-uuid=fixture-cluster\n"
 	if err := os.WriteFile(file, []byte(body), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,21 @@ func TestCloudConfigProjectIDReachesApiClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cfg.service.Close()
+	if cfg.clusterUID != "fixture-cluster" {
+		t.Fatal("shared cluster UUID was discarded")
+	}
 	if cfg.acsConfig.ProjectID != "d629aa4e-eb4a-43fb-abf6-45ad86cae21c" {
 		t.Fatal("project setting was discarded")
+	}
+}
+
+func TestCloudConfigRejectsDifferentNodeGroupBeforeApi(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "cloud-config")
+	body := "[Global]\napi-url=http://127.0.0.1:1/api\napi-key=fixture\nsecret-key=fixture\ncluster-uuid=fixture-cluster\n"
+	if err := os.WriteFile(file, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newManager(&clusterConfig{clusterID: "other-cluster", minSize: 2, maxSize: 3}, withConfigFile(file)); err == nil {
+		t.Fatal("mismatched node group accepted")
 	}
 }
