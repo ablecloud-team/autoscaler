@@ -47,6 +47,7 @@ type APIClient interface {
 
 // Config contains the parameters used to configure a new APIClient
 type Config struct {
+	ProjectID    string
 	APIKey       string
 	SecretKey    string
 	Endpoint     string
@@ -152,7 +153,13 @@ func (client *client) Close() {
 func (client *client) createQueryString(api string, args map[string]string) string {
 	params := make(url.Values)
 	for key, value := range args {
+		if client.config.ProjectID != "" && strings.EqualFold(key, "projectid") {
+			continue
+		}
 		params.Add(key, value)
+	}
+	if client.config.ProjectID != "" {
+		params.Add("projectid", client.config.ProjectID)
 	}
 
 	params.Add("command", api)
@@ -196,6 +203,11 @@ func createMaskedURL(url string) string {
 }
 
 func (client *client) newRequest(api string, args map[string]string, async bool, out interface{}) (map[string]interface{}, error) {
+	for key, value := range args {
+		if client.config.ProjectID != "" && strings.EqualFold(key, "projectid") && value != client.config.ProjectID {
+			return nil, errors.New("request project does not match configured project")
+		}
+	}
 	params := client.createQueryString(api, args)
 
 	requestURL := fmt.Sprintf("%s?%s", client.config.Endpoint, params)
