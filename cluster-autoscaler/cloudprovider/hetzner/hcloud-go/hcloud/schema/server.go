@@ -18,7 +18,7 @@ type Server struct {
 	RescueEnabled   bool               `json:"rescue_enabled"`
 	ISO             *ISO               `json:"iso"`
 	Locked          bool               `json:"locked"`
-	Datacenter      Datacenter         `json:"datacenter"`
+	Location        Location           `json:"location"`
 	Image           *Image             `json:"image"`
 	Protection      ServerProtection   `json:"protection"`
 	Labels          map[string]string  `json:"labels"`
@@ -26,6 +26,11 @@ type Server struct {
 	PrimaryDiskSize int                `json:"primary_disk_size"`
 	PlacementGroup  *PlacementGroup    `json:"placement_group"`
 	LoadBalancers   []int64            `json:"load_balancers"`
+
+	// Deprecated: [Server.Datacenter] is deprecated and will be removed after 1 July 2026.
+	// Use [Server.Location] instead.
+	// See https://docs.hetzner.cloud/changelog#2025-12-16-phasing-out-datacenters
+	Datacenter *Datacenter `json:"datacenter"`
 }
 
 // ServerProtection defines the schema of a server's resource protection.
@@ -99,11 +104,10 @@ type ServerListResponse struct {
 // create a server.
 type ServerCreateRequest struct {
 	Name             string                  `json:"name"`
-	ServerType       interface{}             `json:"server_type"` // int or string
-	Image            interface{}             `json:"image"`       // int or string
+	ServerType       IDOrName                `json:"server_type"`
+	Image            IDOrName                `json:"image"`
 	SSHKeys          []int64                 `json:"ssh_keys,omitempty"`
 	Location         string                  `json:"location,omitempty"`
-	Datacenter       string                  `json:"datacenter,omitempty"`
 	UserData         string                  `json:"user_data,omitempty"`
 	StartAfterCreate *bool                   `json:"start_after_create,omitempty"`
 	Labels           *map[string]string      `json:"labels,omitempty"`
@@ -113,6 +117,11 @@ type ServerCreateRequest struct {
 	Firewalls        []ServerCreateFirewalls `json:"firewalls,omitempty"`
 	PlacementGroup   int64                   `json:"placement_group,omitempty"`
 	PublicNet        *ServerCreatePublicNet  `json:"public_net,omitempty"`
+
+	// Deprecated: [ServerCreateRequest.Datacenter] is deprecated and will be removed after 1 July 2026.
+	// Use [ServerCreateRequest.Location] instead.
+	// See https://docs.hetzner.cloud/changelog#2025-12-16-phasing-out-datacenters
+	Datacenter string `json:"datacenter,omitempty"`
 }
 
 // ServerCreatePublicNet defines the public network configuration of a server.
@@ -257,7 +266,8 @@ type ServerActionDisableRescueResponse struct {
 // ServerActionRebuildRequest defines the schema for the request to
 // rebuild a server.
 type ServerActionRebuildRequest struct {
-	Image interface{} `json:"image"` // int or string
+	Image    IDOrName `json:"image"`
+	UserData *string  `json:"user_data,omitempty"`
 }
 
 // ServerActionRebuildResponse defines the schema of the response when
@@ -270,7 +280,7 @@ type ServerActionRebuildResponse struct {
 // ServerActionAttachISORequest defines the schema for the request to
 // attach an ISO to a server.
 type ServerActionAttachISORequest struct {
-	ISO interface{} `json:"iso"` // int or string
+	ISO IDOrName `json:"iso"`
 }
 
 // ServerActionAttachISOResponse defines the schema of the response when
@@ -287,12 +297,6 @@ type ServerActionDetachISORequest struct{}
 // creating a detach_iso server action.
 type ServerActionDetachISOResponse struct {
 	Action Action `json:"action"`
-}
-
-// ServerActionEnableBackupRequest defines the schema for the request to
-// enable backup for a server.
-type ServerActionEnableBackupRequest struct {
-	BackupWindow *string `json:"backup_window,omitempty"`
 }
 
 // ServerActionEnableBackupResponse defines the schema of the response when
@@ -314,8 +318,8 @@ type ServerActionDisableBackupResponse struct {
 // ServerActionChangeTypeRequest defines the schema for the request to
 // change a server's type.
 type ServerActionChangeTypeRequest struct {
-	ServerType  interface{} `json:"server_type"` // int or string
-	UpgradeDisk bool        `json:"upgrade_disk"`
+	ServerType  IDOrName `json:"server_type"`
+	UpgradeDisk bool     `json:"upgrade_disk"`
 }
 
 // ServerActionChangeTypeResponse defines the schema of the response when
@@ -368,6 +372,7 @@ type ServerActionAttachToNetworkRequest struct {
 	Network  int64     `json:"network"`
 	IP       *string   `json:"ip,omitempty"`
 	AliasIPs []*string `json:"alias_ips,omitempty"`
+	IPRange  *string   `json:"ip_range,omitempty"`
 }
 
 // ServerActionAttachToNetworkResponse defines the schema of the response when

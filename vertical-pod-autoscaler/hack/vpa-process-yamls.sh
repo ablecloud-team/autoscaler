@@ -40,7 +40,7 @@ if [ $# -gt 2 ]; then
 fi
 
 ACTION=$1
-COMPONENTS="vpa-v1-crd-gen vpa-rbac updater-deployment recommender-deployment admission-controller-deployment"
+COMPONENTS="vpa-v1-crd-gen vpa-rbac updater-deployment recommender-deployment admission-controller-deployment admission-controller-service"
 
 function script_path {
   # Regular components have deployment yaml files under /deploy/.  But some components only have
@@ -53,9 +53,6 @@ function script_path {
   fi
 }
 
-case ${ACTION} in
-delete|diff) COMPONENTS+=" vpa-beta2-crd" ;;
-esac
 
 if [ $# -gt 1 ]; then
   COMPONENTS="$2-deployment"
@@ -66,9 +63,11 @@ for i in $COMPONENTS; do
     if [[ ${ACTION} == create || ${ACTION} == apply ]] ; then
       # Allow gencerts to fail silently if certs already exist
       (bash ${SCRIPT_ROOT}/pkg/admission-controller/gencerts.sh || true)
+      kubectl apply -f ${SCRIPT_ROOT}/deploy/admission-controller-service.yaml
     elif [ ${ACTION} == delete ] ; then
       (bash ${SCRIPT_ROOT}/pkg/admission-controller/rmcerts.sh || true)
       (bash ${SCRIPT_ROOT}/pkg/admission-controller/delete-webhook.sh || true)
+      kubectl delete -f ${SCRIPT_ROOT}/deploy/admission-controller-service.yaml --ignore-not-found
     fi
   fi
   if [[ ${ACTION} == print ]]; then

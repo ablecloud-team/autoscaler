@@ -17,6 +17,7 @@ limitations under the License.
 package cloudstack
 
 import (
+	"fmt"
 	"sync"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/cloudstack/service"
@@ -42,6 +43,7 @@ type clusterConfig struct {
 type CSConfig struct {
 	Global struct {
 		APIURL      string `gcfg:"api-url"`
+		ClusterUID  string `gcfg:"cluster-uuid"`
 		APIKey      string `gcfg:"api-key"`
 		SecretKey   string `gcfg:"secret-key"`
 		SSLNoVerify bool   `gcfg:"ssl-no-verify"`
@@ -51,9 +53,12 @@ type CSConfig struct {
 }
 
 func (manager *manager) clusterForNode(node *v1.Node) (*asg, error) {
-	_, err := manager.asg.Belongs(node)
+	belongs, err := manager.asg.Belongs(node)
 	if err != nil {
 		return nil, err
+	}
+	if !belongs {
+		return nil, nil
 	}
 	return manager.asg, nil
 }
@@ -123,6 +128,11 @@ func newManager(clusterConfig *clusterConfig, opts ...option) (*manager, error) 
 	cfg, err := createConfig(opts...)
 	if err != nil {
 		return nil, err
+	}
+
+	if cfg.clusterUID != "" && cfg.clusterUID != clusterConfig.clusterID {
+		cfg.service.Close()
+		return nil, fmt.Errorf("cloud-config cluster-uuid does not match --nodes cluster ID")
 	}
 
 	cfg.asg.cluster = &service.Cluster{

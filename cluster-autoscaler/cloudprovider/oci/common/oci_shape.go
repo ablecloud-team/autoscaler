@@ -7,6 +7,7 @@ package common
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -84,7 +85,7 @@ func (osf *shapeGetterImpl) GetNodePoolShape(np *oke.NodePool, ephemeralStorage 
 	if np.NodeShapeConfig != nil {
 		return &Shape{
 			Name: shapeName,
-			CPU:  *np.NodeShapeConfig.Ocpus * 2,
+			CPU:  ocpuToVCPU(shapeName, *np.NodeShapeConfig.Ocpus),
 			// num_bytes * kilo * mega * giga
 			MemoryInBytes:           *np.NodeShapeConfig.MemoryInGBs * 1024 * 1024 * 1024,
 			GPU:                     0,
@@ -105,23 +106,31 @@ func (osf *shapeGetterImpl) GetNodePoolShape(np *oke.NodePool, ephemeralStorage 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	resp, err := osf.shapeClient.ListShapes(ctx, core.ListShapesRequest{
+	request := core.ListShapesRequest{
 		CompartmentId: np.CompartmentId,
-		Limit:         common.Int(500),
-	})
-	if err != nil {
-		return nil, errors.Wrap(err, "unable to ListShapes")
 	}
 
-	// Update the cache based on latest results
-	for _, s := range resp.Items {
-		osf.cache[*s.Shape] = &Shape{
-			Name:                    shapeName,
-			CPU:                     getFloat32(s.Ocpus) * 2, // convert ocpu to vcpu
-			GPU:                     getInt(s.Gpus),
-			MemoryInBytes:           getFloat32(s.MemoryInGBs) * 1024 * 1024 * 1024,
-			EphemeralStorageInBytes: float32(ephemeralStorage),
+	for {
+		resp, err := osf.shapeClient.ListShapes(ctx, request)
+		if err != nil {
+			return nil, errors.Wrap(err, "unable to ListShapes")
 		}
+
+		// Update the cache based on latest results
+		for _, s := range resp.Items {
+			osf.cache[*s.Shape] = &Shape{
+				Name:                    *s.Shape,
+				CPU:                     ocpuToVCPU(*s.Shape, getFloat32(s.Ocpus)),
+				GPU:                     getInt(s.Gpus),
+				MemoryInBytes:           getFloat32(s.MemoryInGBs) * 1024 * 1024 * 1024,
+				EphemeralStorageInBytes: float32(ephemeralStorage),
+			}
+		}
+
+		if resp.OpcNextPage == nil {
+			break
+		}
+		request.Page = resp.OpcNextPage
 	}
 
 	// fetch value from updated cache... if it exists.
@@ -163,7 +172,7 @@ func (osf *shapeGetterImpl) GetInstancePoolShape(ip *core.InstancePool) (*Shape,
 				shape.Name = *instanceDetails.LaunchDetails.Shape
 			}
 			if instanceDetails.LaunchDetails.ShapeConfig.Ocpus != nil {
-				shape.CPU = *instanceDetails.LaunchDetails.ShapeConfig.Ocpus
+				shape.CPU = ocpuToVCPU(shape.Name, *instanceDetails.LaunchDetails.ShapeConfig.Ocpus)
 				// Minimum amount of memory unless explicitly set higher
 				shape.MemoryInBytes = *instanceDetails.LaunchDetails.ShapeConfig.Ocpus * 1024 * 1024 * 1024
 			}
@@ -197,7 +206,7 @@ func (osf *shapeGetterImpl) GetInstancePoolShape(ip *core.InstancePool) (*Shape,
 				if *nextShape.Shape == *instanceDetails.LaunchDetails.Shape {
 					shape.Name = *nextShape.Shape
 					if nextShape.Ocpus != nil {
-						shape.CPU = *nextShape.Ocpus
+						shape.CPU = ocpuToVCPU(shape.Name, *nextShape.Ocpus)
 					}
 					if nextShape.MemoryInGBs != nil {
 						shape.MemoryInBytes = *nextShape.MemoryInGBs * 1024 * 1024 * 1024
@@ -219,6 +228,16 @@ func (osf *shapeGetterImpl) GetInstancePoolShape(ip *core.InstancePool) (*Shape,
 
 	osf.cache[*ip.Id] = shape
 	return shape, nil
+}
+
+// ocpuToVCPU converts OCPUs to vCPUs for the given shape. ARM A1 shapes have a
+// 1:1 OCPU-to-vCPU ratio, while all other shapes (x86, A2, A4) use 1:2.
+// See https://docs.oracle.com/en-us/iaas/Content/Compute/References/computeshapes.htm
+func ocpuToVCPU(shapeName string, ocpus float32) float32 {
+	if strings.Contains(shapeName, ".A1.") {
+		return ocpus
+	}
+	return ocpus * 2
 }
 
 // getFloat32 is a helper to get a float32 pointer value or default to 0.

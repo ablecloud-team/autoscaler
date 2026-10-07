@@ -28,18 +28,11 @@ function cleanup() {
 }
 trap cleanup EXIT
 
-if [[ -z $(which crd-ref-docs) ]]; then
-    (
-        cd $WORKSPACE
-	      go install github.com/elastic/crd-ref-docs@latest
-    )
-    CONTROLLER_GEN=${GOBIN:-$(go env GOPATH)/bin}/crd-ref-docs
-else
-    CONTROLLER_GEN=$(which crd-ref-docs)
-fi
+go install github.com/elastic/crd-ref-docs@v0.3.0
+export CONTROLLER_GEN=${GOBIN:-$(go env GOPATH)/bin}/crd-ref-docs
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-crd-ref-docs \
+$CONTROLLER_GEN \
     --source-path=pkg/apis/ \
     --config=./hack/api-docs/config.yaml \
     --renderer=markdown \

@@ -17,6 +17,7 @@ limitations under the License.
 package clusterapi
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path"
@@ -39,7 +40,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	klog "k8s.io/klog/v2"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 const (
@@ -55,6 +56,7 @@ const (
 	resourceNameMachineSet        = "machinesets"
 	resourceNameMachineDeployment = "machinedeployments"
 	resourceNameMachinePool       = "machinepools"
+	deletingMachinePrefix         = "deleting-machine-"
 	failedMachinePrefix           = "failed-machine-"
 	pendingMachinePrefix          = "pending-machine-"
 	machineTemplateKind           = "MachineTemplate"
@@ -65,6 +67,8 @@ const (
 	autoDiscovererTypeClusterAPI  = "clusterapi"
 	autoDiscovererClusterNameKey  = "clusterName"
 	autoDiscovererNamespaceKey    = "namespace"
+
+	machinePhaseFailed = "Failed"
 )
 
 // machineController watches for Nodes, Machines, MachinePools, MachineSets, and
@@ -81,6 +85,7 @@ type machineController struct {
 	nodeInformer                cache.SharedIndexInformer
 	managementClient            dynamic.Interface
 	managementScaleClient       scale.ScalesGetter
+	managementDiscoveryClient   discovery.DiscoveryInterface
 	machineSetResource          schema.GroupVersionResource
 	machineResource             schema.GroupVersionResource
 	machinePoolResource         schema.GroupVersionResource
@@ -314,6 +319,9 @@ func (c *machineController) findMachineByProviderID(providerID normalizedProvide
 		return u.DeepCopy(), nil
 	}
 
+	if isDeletingMachineProviderID(providerID) {
+		return c.findMachine(machineKeyFromDeletingMachineProviderID(providerID))
+	}
 	if isFailedMachineProviderID(providerID) {
 		return c.findMachine(machineKeyFromFailedProviderID(providerID))
 	}
@@ -339,6 +347,24 @@ func (c *machineController) findMachineByProviderID(providerID normalizedProvide
 	return c.findMachine(path.Join(ns, machineID))
 }
 
+func createDeletingMachineNormalizedProviderID(namespace, name string) string {
+	return fmt.Sprintf("%s%s_%s", deletingMachinePrefix, namespace, name)
+}
+
+func isDeletingMachineProviderID(providerID normalizedProviderID) bool {
+	return strings.HasPrefix(string(providerID), deletingMachinePrefix)
+}
+
+func machineKeyFromDeletingMachineProviderID(providerID normalizedProviderID) string {
+	namespaceName := strings.TrimPrefix(string(providerID), deletingMachinePrefix)
+	return strings.Replace(namespaceName, "_", "/", 1)
+}
+
+// createPendingMachineProviderID creates a providerID for a machine that is pending
+func createPendingMachineProviderID(namespace, name string) string {
+	return fmt.Sprintf("%s%s_%s", pendingMachinePrefix, namespace, name)
+}
+
 func isPendingMachineProviderID(providerID normalizedProviderID) bool {
 	return strings.HasPrefix(string(providerID), pendingMachinePrefix)
 }
@@ -348,6 +374,10 @@ func machineKeyFromPendingMachineProviderID(providerID normalizedProviderID) str
 	return strings.Replace(namespaceName, "_", "/", 1)
 }
 
+func createFailedMachineNormalizedProviderID(namespace, name string) string {
+	return fmt.Sprintf("%s%s_%s", failedMachinePrefix, namespace, name)
+}
+
 func isFailedMachineProviderID(providerID normalizedProviderID) bool {
 	return strings.HasPrefix(string(providerID), failedMachinePrefix)
 }
@@ -355,6 +385,15 @@ func isFailedMachineProviderID(providerID normalizedProviderID) bool {
 func machineKeyFromFailedProviderID(providerID normalizedProviderID) string {
 	namespaceName := strings.TrimPrefix(string(providerID), failedMachinePrefix)
 	return strings.Replace(namespaceName, "_", "/", 1)
+}
+
+// isProviderIDNormalized determines whether a node's providerID is the standard
+// providerID assigned by the cloud provider, or if it has
+// been modified by the CAS CAPI provider to indicate deleting, pending, or failed
+func isProviderIDNormalized(providerID normalizedProviderID) bool {
+	return !isDeletingMachineProviderID(providerID) &&
+		!isPendingMachineProviderID(providerID) &&
+		!isFailedMachineProviderID(providerID)
 }
 
 // findNodeByNodeName finds the Node object keyed by name.. Returns
@@ -422,7 +461,7 @@ func newMachineController(
 	managementInformerFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(managementClient, 0, namespaceToWatch(autoDiscoverySpecs), nil)
 
 	CAPIGroup := getCAPIGroup()
-	CAPIVersion, err := getAPIGroupPreferredVersion(managementDiscoveryClient, CAPIGroup)
+	CAPIVersion, err := getCAPIGroupPreferredVersion(managementDiscoveryClient, CAPIGroup)
 	if err != nil {
 		return nil, fmt.Errorf("could not find preferred version for CAPI group %q: %v", CAPIGroup, err)
 	}
@@ -526,6 +565,7 @@ func newMachineController(
 		nodeInformer:                nodeInformer,
 		managementClient:            managementClient,
 		managementScaleClient:       managementScaleClient,
+		managementDiscoveryClient:   managementDiscoveryClient,
 		machineSetResource:          gvrMachineSet,
 		machinePoolResource:         gvrMachinePool,
 		machinePoolsAvailable:       machinePoolsAvailable,
@@ -551,11 +591,15 @@ func groupVersionHasResource(client discovery.DiscoveryInterface, groupVersion, 
 	return false, nil
 }
 
-func getAPIGroupPreferredVersion(client discovery.DiscoveryInterface, APIGroup string) (string, error) {
+func getCAPIGroupPreferredVersion(client discovery.DiscoveryInterface, APIGroup string) (string, error) {
 	if version := os.Getenv(CAPIVersionEnvVar); version != "" {
 		return version, nil
 	}
 
+	return getAPIGroupPreferredVersion(client, APIGroup)
+}
+
+func getAPIGroupPreferredVersion(client discovery.DiscoveryInterface, APIGroup string) (string, error) {
 	groupList, err := client.ServerGroups()
 	if err != nil {
 		return "", fmt.Errorf("failed to get ServerGroups: %v", err)
@@ -568,6 +612,36 @@ func getAPIGroupPreferredVersion(client discovery.DiscoveryInterface, APIGroup s
 	}
 
 	return "", fmt.Errorf("failed to find API group %q", APIGroup)
+}
+
+// getKindPreferredVersion returns the first version in apiGroup that serves the given Kind.
+// In CAPI v1beta2, infrastructureRef only carries apiGroup (no apiVersion), so the
+// group-level preferred version may not match what the infra provider actually serves.
+func getKindPreferredVersion(client discovery.DiscoveryInterface, apiGroup, kind string) (string, error) {
+	groupList, err := client.ServerGroups()
+	if err != nil {
+		return "", fmt.Errorf("failed to get ServerGroups: %v", err)
+	}
+
+	for _, group := range groupList.Groups {
+		if group.Name != apiGroup {
+			continue
+		}
+		for _, v := range group.Versions {
+			resourceList, err := client.ServerResourcesForGroupVersion(v.GroupVersion)
+			if err != nil {
+				return "", fmt.Errorf("failed to get resources for %s: %v", v.GroupVersion, err)
+			}
+			for _, r := range resourceList.APIResources {
+				if r.Kind == kind {
+					return v.Version, nil
+				}
+			}
+		}
+		return "", fmt.Errorf("kind %q not found in any version of group %q", kind, apiGroup)
+	}
+
+	return "", fmt.Errorf("failed to find API group %q", apiGroup)
 }
 
 func (c *machineController) scalableResourceProviderIDs(scalableResource *unstructured.Unstructured) ([]string, error) {
@@ -603,36 +677,56 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 	}
 
 	for _, machine := range machines {
-		providerID, found, err := unstructured.NestedString(machine.UnstructuredContent(), "spec", "providerID")
-		if err != nil {
-			return nil, err
-		}
-
-		if found {
-			if providerID != "" {
-				providerIDs = append(providerIDs, providerID)
-				continue
-			}
-		}
-
-		klog.Warningf("Machine %q has no providerID", machine.GetName())
-
+		// Failed Machines
+		// In some cases it is possible for a machine to have acquired a provider ID from the infrastructure and
+		// then become failed later. We want to ensure that a failed machine is not counted towards the total
+		// number of nodes in the cluster, for this reason we will detect a failed machine first, regardless
+		// of provider ID, and give it a normalized provider ID with failure message prepended.
 		failureMessage, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "failureMessage")
 		if err != nil {
 			return nil, err
 		}
 
 		if found {
-			klog.V(4).Infof("Status.FailureMessage of machine %q is %q", machine.GetName(), failureMessage)
-			// Provide a fake ID to allow the autoscaler to track machines that will never
-			// become nodes and mark the nodegroup unhealthy after maxNodeProvisionTime.
-			// Fake ID needs to be recognised later and converted into a machine key.
-			// Use an underscore as a separator between namespace and name as it is not a
-			// valid character within a namespace name.
-			providerIDs = append(providerIDs, fmt.Sprintf("%s%s_%s", failedMachinePrefix, machine.GetNamespace(), machine.GetName()))
+			machinePhase, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "phase")
+			if err != nil {
+				return nil, err
+			}
+
+			if found && machinePhase == machinePhaseFailed {
+				// Provide a normalized ID to allow the autoscaler to track machines that will never
+				// become nodes and mark the nodegroup unhealthy after maxNodeProvisionTime.
+				// Fake ID needs to be recognised later and converted into a machine key.
+				// Use an underscore as a separator between namespace and name as it is not a
+				// valid character within a namespace name.
+
+				// TODO(LucasAndFlores): once we moved to the version 1.15, we should exclude the check for failed machine (lines 684-708), since this state was deprecated.
+				// Ref: https://cluster-api.sigs.k8s.io/developer/providers/migrations/v1.10-to-v1.11#deprecations
+				klog.V(4).Infof("Status.FailureMessage of machine %q is %q", machine.GetName(), failureMessage)
+				providerIDs = append(providerIDs, createFailedMachineNormalizedProviderID(machine.GetNamespace(), machine.GetName()))
+				continue
+			}
+		}
+
+		// Deleting Machines
+		// Machines that are in deleting state should be identified so that in scenarios where the core
+		// autoscaler would like to adjust the size of a node group, we can give a proper count and
+		// be able to filter machines in that state, regardless of whether they are still active nodes in the cluster.
+		// We give these machines normalized provider IDs to aid in the filtering process.
+		if !machine.GetDeletionTimestamp().IsZero() {
+			klog.V(4).Infof("Machine %q has a non-zero deletion timestamp", machine.GetName())
+			providerIDs = append(providerIDs, createDeletingMachineNormalizedProviderID(machine.GetNamespace(), machine.GetName()))
 			continue
 		}
 
+		// Pending Machines
+		// Machines that do not yet have an associated node reference are considering to be pending. These
+		// nodes need to be filtered so that in a case where a machine is not becoming a node, or the instance
+		// lifecycle has changed during provisioning (eg spot instance going away), or the core autoscaler has
+		// decided that the node is not needed.
+		// Look for a node reference in the status, a machine without a node reference, and that is also not
+		// in failed or deleting state, has not yet become a node, and should be marked as pending.
+		// We give these machines normalized provider IDs to aid in the filtering process.
 		_, found, err = unstructured.NestedFieldCopy(machine.UnstructuredContent(), "status", "nodeRef")
 		if err != nil {
 			return nil, err
@@ -640,10 +734,33 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 
 		if !found {
 			klog.V(4).Infof("Status.NodeRef of machine %q is currently nil", machine.GetName())
-			providerIDs = append(providerIDs, fmt.Sprintf("%s%s_%s", pendingMachinePrefix, machine.GetNamespace(), machine.GetName()))
+			providerIDs = append(providerIDs, createPendingMachineProviderID(machine.GetNamespace(), machine.GetName()))
 			continue
 		}
 
+		// Running Machines
+		// We have filtered out the machines in failed, deleting, and pending states. We now check the provider
+		// ID and potentially the node reference details. It is ok for a machine not to have a provider ID as
+		// not all CAPI provider implement this field, but a machine in running state should have a valid
+		// node reference. If a provider ID is present, we add that to the list as we know it is not failed,
+		// deleting, or pending. If an empty provider ID is present, we check the node details to ensure that
+		// the machine references a valid node.
+		providerID, found, err := unstructured.NestedString(machine.UnstructuredContent(), "spec", "providerID")
+		if err != nil {
+			return nil, err
+		}
+
+		if found {
+			if providerID != "" {
+				// Machine has a provider ID, add it to the list
+				providerIDs = append(providerIDs, providerID)
+				continue
+			}
+		}
+
+		klog.Warningf("Machine %q has no providerID", machine.GetName())
+
+		// Begin checking to determine if the node reference is valid
 		nodeRefKind, found, err := unstructured.NestedString(machine.UnstructuredContent(), "status", "nodeRef", "kind")
 		if err != nil {
 			return nil, err
@@ -665,6 +782,8 @@ func (c *machineController) findScalableResourceProviderIDs(scalableResource *un
 				return nil, fmt.Errorf("unknown node %q", nodeRefName)
 			}
 
+			// A node has been found that corresponds to this machine, since we know that this machine has
+			// an empty provider ID, we add the provider ID from the node to the list.
 			if node != nil {
 				providerIDs = append(providerIDs, node.Spec.ProviderID)
 			}
@@ -690,8 +809,15 @@ func (c *machineController) nodeGroups() ([]cloudprovider.NodeGroup, error) {
 		}
 
 		if ng != nil {
+			if isScalableResourceAndPaused(*r) {
+				// if the resource is paused from reconciling by cluster api controllers, we don't want to include it
+				// as an active node group.
+				klog.V(4).Infof("discovered a paused node group: %s", ng.Debug(context.TODO()))
+				continue
+			}
+
 			nodegroups = append(nodegroups, ng)
-			klog.V(4).Infof("discovered node group: %s", ng.Debug())
+			klog.V(4).Infof("discovered node group: %s", ng.Debug(context.TODO()))
 		}
 	}
 	return nodegroups, nil
@@ -703,6 +829,13 @@ func (c *machineController) nodeGroupForNode(node *corev1.Node) (*nodegroup, err
 		return nil, err
 	}
 	if scalableResource == nil {
+		return nil, nil
+	}
+
+	// if the scalable resource associated with this node is paused, we do not want to associate
+	// the node with a node group as the group will also be paused. we return nil here to ensure
+	// that the core autoscaler does not try to remove the node while it is paused.
+	if isScalableResourceAndPaused(*scalableResource) {
 		return nil, nil
 	}
 
@@ -771,6 +904,27 @@ func (c *machineController) listMachinesForScalableResource(r *unstructured.Unst
 	default:
 		return nil, fmt.Errorf("unknown scalable resource kind %s", r.GetKind())
 	}
+}
+
+func (c *machineController) listMachineSetsForMachineDeployment(r *unstructured.Unstructured) ([]*unstructured.Unstructured, error) {
+	selector := labels.SelectorFromSet(map[string]string{
+		machineDeploymentNameLabel: r.GetName(),
+	})
+	objs, err := c.machineSetInformer.Lister().ByNamespace(r.GetNamespace()).List(selector)
+	if err != nil {
+		return nil, fmt.Errorf("unable to list MachineSets for MachineDeployment %s: %w", r.GetName(), err)
+	}
+
+	results := make([]*unstructured.Unstructured, 0, len(objs))
+	for _, x := range objs {
+		u, ok := x.(*unstructured.Unstructured)
+		if !ok {
+			return nil, fmt.Errorf("expected unstructured resource from lister, not %T", x)
+		}
+		results = append(results, u.DeepCopy())
+	}
+
+	return results, nil
 }
 
 func (c *machineController) listScalableResources() ([]*unstructured.Unstructured, error) {

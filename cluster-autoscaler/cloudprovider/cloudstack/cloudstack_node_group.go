@@ -17,17 +17,18 @@ limitations under the License.
 package cloudstack
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/cloudstack/service"
-	"k8s.io/autoscaler/cluster-autoscaler/config"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/config"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 
 	apiv1 "k8s.io/api/core/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
 // asg implements NodeGroup interface.
@@ -37,30 +38,30 @@ type asg struct {
 }
 
 // MaxSize returns maximum size of the node group.
-func (asg *asg) MaxSize() int {
+func (asg *asg) MaxSize(ctx context.Context) int {
 	return asg.cluster.Maxsize
 }
 
 // MinSize returns minimum size of the node group.
-func (asg *asg) MinSize() int {
+func (asg *asg) MinSize(ctx context.Context) int {
 	return asg.cluster.Minsize
 }
 
 // TargetSize returns the current TARGET size of the node group. It is possible that the
 // number is different from the number of nodes registered in Kubernetes.
-func (asg *asg) TargetSize() (int, error) {
+func (asg *asg) TargetSize(ctx context.Context) (int, error) {
 	return asg.cluster.WorkerCount, nil
 }
 
 // IncreaseSize increases cluster size
-func (asg *asg) IncreaseSize(delta int) error {
+func (asg *asg) IncreaseSize(ctx context.Context, delta int) error {
 	klog.Infof("Increase Cluster : %s by %d", asg.cluster.ID, delta)
 	if delta <= 0 {
 		return fmt.Errorf("Delta must be positive")
 	}
 	newSize := asg.cluster.WorkerCount + delta
-	if newSize > asg.MaxSize() {
-		return fmt.Errorf("Delta too large - Wanted : %d Max : %d Have : %d", newSize, asg.MaxSize(), asg.cluster.WorkerCount)
+	if newSize > asg.MaxSize(context.TODO()) {
+		return fmt.Errorf("Delta too large - Wanted : %d Max : %d Have : %d", newSize, asg.MaxSize(context.TODO()), asg.cluster.WorkerCount)
 	}
 
 	cluster, err := asg.manager.scaleCluster(asg.cluster.ID, asg.cluster.WorkerCount+delta)
@@ -72,7 +73,7 @@ func (asg *asg) IncreaseSize(delta int) error {
 }
 
 // AtomicIncreaseSize is not implemented.
-func (asg *asg) AtomicIncreaseSize(delta int) error {
+func (asg *asg) AtomicIncreaseSize(ctx context.Context, delta int) error {
 	return cloudprovider.ErrNotImplemented
 }
 
@@ -81,39 +82,36 @@ func (asg *asg) AtomicIncreaseSize(delta int) error {
 // request for new nodes that have not been yet fulfilled. Delta should be negative.
 // It is assumed that cloud provider will not delete the existing nodes if the size
 // when there is an option to just decrease the target.
-func (asg *asg) DecreaseTargetSize(delta int) error {
+func (asg *asg) DecreaseTargetSize(ctx context.Context, delta int) error {
 	return errors.NewAutoscalerError(errors.CloudProviderError, "CloudProvider does not support DecreaseTargetSize")
 }
 
 // Belongs returns true if the given node belongs to the NodeGroup.
 func (asg *asg) Belongs(node *apiv1.Node) (bool, error) {
-	for _, vm := range asg.cluster.VirtualMachines {
-		if vm.Name != "" && node.Name != "" && vm.Name == node.Name {
-			return true, nil
-		}
-		if vm.ID == node.Status.NodeInfo.SystemUUID {
-			return true, nil
-		}
-	}
-	return false, fmt.Errorf("Unable to find node %s in cluster", node.Name)
+	vm := asg.cluster.FindWorkerVM(node.Name, node.Spec.ProviderID, node.Status.NodeInfo.SystemUUID)
+	return vm != nil, nil
 }
 
 // DeleteNodes deletes the nodes from the group.
-func (asg *asg) DeleteNodes(nodes []*apiv1.Node) error {
-	if asg.cluster.WorkerCount-len(nodes) < asg.MinSize() {
-		return fmt.Errorf("Goes below minsize. Can not delete %v nodes", len(nodes))
-	}
-
-	nodeIDs := make([]string, len(nodes))
-	for i, node := range nodes {
-		if vm, ok := asg.cluster.VirtualMachineMap[node.Name]; ok {
-			nodeIDs[i] = vm.ID
-		} else {
-			nodeIDs[i] = node.Status.NodeInfo.SystemUUID
+func (asg *asg) DeleteNodes(ctx context.Context, nodes []*apiv1.Node) error {
+	nodeIDs := make([]string, 0, len(nodes))
+	seen := make(map[string]bool)
+	for _, node := range nodes {
+		if node == nil {
+			return fmt.Errorf("Cannot delete a nil Kubernetes node")
 		}
+		vm := asg.cluster.FindWorkerVM(node.Name, node.Spec.ProviderID, node.Status.NodeInfo.SystemUUID)
+		if vm == nil || seen[vm.ID] {
+			return fmt.Errorf("Cannot delete unknown, non-worker or duplicate node %s", node.Name)
+		}
+		seen[vm.ID] = true
+		nodeIDs = append(nodeIDs, vm.ID)
 	}
 	if len(nodeIDs) == 0 {
-		return fmt.Errorf("Unable to fetch nodeids from %v", nodes)
+		return fmt.Errorf("No managed worker nodes requested for deletion")
+	}
+	if asg.cluster.WorkerCount-len(nodeIDs) < asg.MinSize(context.TODO()) {
+		return fmt.Errorf("Goes below minsize. Can not delete %v nodes", len(nodeIDs))
 	}
 	cluster, err := asg.manager.removeNodesFromCluster(asg.cluster.ID, nodeIDs...)
 	if err != nil {
@@ -124,7 +122,7 @@ func (asg *asg) DeleteNodes(nodes []*apiv1.Node) error {
 }
 
 // ForceDeleteNodes deletes nodes from the group regardless of constraints.
-func (asg *asg) ForceDeleteNodes(nodes []*apiv1.Node) error {
+func (asg *asg) ForceDeleteNodes(ctx context.Context, nodes []*apiv1.Node) error {
 	return cloudprovider.ErrNotImplemented
 }
 
@@ -134,52 +132,50 @@ func (asg *asg) Id() string {
 }
 
 // Debug returns cluster id.
-func (asg *asg) Debug() string {
+func (asg *asg) Debug(ctx context.Context) string {
 	js, _ := json.Marshal(asg.cluster)
 	return fmt.Sprintf("Debug : %s", js)
 }
 
 // Nodes returns a list of all nodes that belong to this node group.
-func (asg *asg) Nodes() ([]cloudprovider.Instance, error) {
-	instances := make([]cloudprovider.Instance, len(asg.cluster.VirtualMachines))
-	for i := 0; i < len(asg.cluster.VirtualMachines); i++ {
-		instances[i] = cloudprovider.Instance{
-			Id: asg.cluster.VirtualMachines[i].ID,
-		}
+func (asg *asg) Nodes(ctx context.Context) ([]cloudprovider.Instance, error) {
+	var instances []cloudprovider.Instance
+	for _, vm := range asg.cluster.WorkerVirtualMachines() {
+		instances = append(instances, cloudprovider.Instance{Id: "external-cloudstack://" + vm.ID})
 	}
 	return instances, nil
 }
 
 // Exist checks if the node group really exists on the cloud provider side. Allows to tell the
 // theoretical node group from the real one.
-func (asg *asg) Exist() bool {
+func (asg *asg) Exist(ctx context.Context) bool {
 	return true
 }
 
 // Autoprovisioned returns true if the node group is autoprovisioned.
-func (asg *asg) Autoprovisioned() bool {
+func (asg *asg) Autoprovisioned(ctx context.Context) bool {
 	return false
 }
 
 // Create creates the node group on the cloud provider side.
-func (asg *asg) Create() (cloudprovider.NodeGroup, error) {
+func (asg *asg) Create(ctx context.Context) (cloudprovider.NodeGroup, error) {
 	return nil, cloudprovider.ErrNotImplemented
 }
 
 // Delete deletes the node group on the cloud provider side.
 // This will be executed only for autoprovisioned node groups, once their size drops to 0.
-func (asg *asg) Delete() error {
+func (asg *asg) Delete(ctx context.Context) error {
 	return cloudprovider.ErrNotImplemented
 }
 
 // TemplateNodeInfo returns a node template for this node group.
-func (asg *asg) TemplateNodeInfo() (*framework.NodeInfo, error) {
+func (asg *asg) TemplateNodeInfo(ctx context.Context) (*framework.NodeInfo, error) {
 	return nil, cloudprovider.ErrNotImplemented
 }
 
 // GetOptions returns NodeGroupAutoscalingOptions that should be used for this particular
 // NodeGroup. Returning a nil will result in using default options.
-func (asg *asg) GetOptions(defaults config.NodeGroupAutoscalingOptions) (*config.NodeGroupAutoscalingOptions, error) {
+func (asg *asg) GetOptions(ctx context.Context, defaults config.NodeGroupAutoscalingOptions) (*config.NodeGroupAutoscalingOptions, error) {
 	return nil, cloudprovider.ErrNotImplemented
 }
 

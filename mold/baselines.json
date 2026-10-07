@@ -1,0 +1,6 @@
+{
+  "1.34": {"source_sha":"cb2123ed13148c38fbdb1ede42d8e99761ee2909","release":"cluster-autoscaler-1.34.5","status":"stable"},
+  "1.35": {"source_sha":"2d42588803c71fe9b35dcd9e3669ac6bb550ca22","release":"cluster-autoscaler-1.35.2","status":"stable"},
+  "1.36": {"source_sha":"35e8a280425c76a4040f57ae0fa232a952c02024","release":"cluster-autoscaler-1.36.1","status":"stable"},
+  "1.37": {"source_sha":"22575f5c8af3edd9a10ca10d7d9edef68d2982cd","release":"1.37-development-source","status":"development-candidate"}
+}

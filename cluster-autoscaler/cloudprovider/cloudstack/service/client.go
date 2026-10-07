@@ -29,6 +29,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -46,6 +47,7 @@ type APIClient interface {
 
 // Config contains the parameters used to configure a new APIClient
 type Config struct {
+	ProjectID    string
 	APIKey       string
 	SecretKey    string
 	Endpoint     string
@@ -75,7 +77,9 @@ type JobResponse struct {
 func (client *client) getResponseData(data map[string]interface{}) map[string]interface{} {
 	for k := range data {
 		if strings.HasSuffix(k, "response") {
-			return data[k].(map[string]interface{})
+			if response, ok := data[k].(map[string]interface{}); ok {
+				return response
+			}
 		}
 	}
 	return nil
@@ -104,15 +108,29 @@ func (client *client) pollAsyncJob(jobID string, out interface{}) (map[string]in
 				return result, err
 			}
 
-			status := result["jobstatus"].(float64)
+			status, ok := result["jobstatus"].(float64)
+			if !ok {
+				return nil, errors.New("missing async job status")
+			}
 			switch {
 			case status == 0:
 				klog.Info("Still waiting for job " + jobID + " to complete")
 				continue
 			case status == 1:
 				data, err := json.Marshal(result["jobresult"])
-				json.Unmarshal(data, out)
-				return result["jobresult"].(map[string]interface{}), err
+				if err != nil {
+					return nil, err
+				}
+				if out != nil {
+					if err := json.Unmarshal(data, out); err != nil {
+						return nil, err
+					}
+				}
+				jobResult, ok := result["jobresult"].(map[string]interface{})
+				if !ok {
+					return nil, errors.New("invalid async job result")
+				}
+				return jobResult, nil
 			case status > 1:
 				err := fmt.Errorf("API failed for job %s : %v", jobID, result)
 				klog.Error(err)
@@ -135,14 +153,20 @@ func (client *client) Close() {
 func (client *client) createQueryString(api string, args map[string]string) string {
 	params := make(url.Values)
 	for key, value := range args {
+		if client.config.ProjectID != "" && strings.EqualFold(key, "projectid") {
+			continue
+		}
 		params.Add(key, value)
+	}
+	if client.config.ProjectID != "" {
+		params.Add("projectid", client.config.ProjectID)
 	}
 
 	params.Add("command", api)
 	params.Add("response", "json")
 
 	params.Add("apiKey", client.config.APIKey)
-	encodedParams := params.Encode()
+	encodedParams := encodeMoldValues(params)
 
 	mac := hmac.New(sha256.New, []byte(client.config.SecretKey))
 	mac.Write([]byte(strings.Replace(strings.ToLower(encodedParams), "+", "%20", -1)))
@@ -150,6 +174,23 @@ func (client *client) createQueryString(api string, args map[string]string) stri
 	encodedParams = fmt.Sprintf("%s&signature=%s", encodedParams, url.QueryEscape(signature))
 
 	return encodedParams
+}
+
+// encodeMoldValues matches Java URLEncoder in Mold ApiServer: sort keys,
+// encode values only, preserve '*', encode '~', and use %20 for spaces.
+func encodeMoldValues(params url.Values) string {
+	keys := make([]string, 0, len(params))
+	for key := range params {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		value := url.QueryEscape(params.Get(key))
+		value = strings.NewReplacer("+", "%20", "%2A", "*", "~", "%7E").Replace(value)
+		parts = append(parts, key+"="+value)
+	}
+	return strings.Join(parts, "&")
 }
 
 func createMaskedURL(url string) string {
@@ -162,6 +203,11 @@ func createMaskedURL(url string) string {
 }
 
 func (client *client) newRequest(api string, args map[string]string, async bool, out interface{}) (map[string]interface{}, error) {
+	for key, value := range args {
+		if client.config.ProjectID != "" && strings.EqualFold(key, "projectid") && value != client.config.ProjectID {
+			return nil, errors.New("request project does not match configured project")
+		}
+	}
 	params := client.createQueryString(api, args)
 
 	requestURL := fmt.Sprintf("%s?%s", client.config.Endpoint, params)
@@ -174,13 +220,22 @@ func (client *client) newRequest(api string, args map[string]string, async bool,
 	}
 	klog.Info("NewAPIRequest response status code:", response.StatusCode)
 
-	body, _ := io.ReadAll(response.Body)
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, err
+	}
 	var data map[string]interface{}
-	_ = json.Unmarshal([]byte(body), &data)
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, fmt.Errorf("invalid API response (HTTP %d): %w", response.StatusCode, err)
+	}
 
 	if data != nil && async {
 		if jobResponse := client.getResponseData(data); jobResponse != nil && jobResponse["jobid"] != nil {
-			jobID := jobResponse["jobid"].(string)
+			jobID, ok := jobResponse["jobid"].(string)
+			if !ok || jobID == "" {
+				return nil, errors.New("invalid async job id")
+			}
 			return client.pollAsyncJob(jobID, out)
 		}
 	}
@@ -190,7 +245,9 @@ func (client *client) newRequest(api string, args map[string]string, async bool,
 			return nil, fmt.Errorf("(HTTP %v, error code %v) %v", apiResponse["errorcode"], apiResponse["cserrorcode"], apiResponse["errortext"])
 		}
 		if out != nil {
-			json.Unmarshal([]byte(body), out)
+			if err := json.Unmarshal(body, out); err != nil {
+				return nil, err
+			}
 		}
 		return apiResponse, nil
 	}

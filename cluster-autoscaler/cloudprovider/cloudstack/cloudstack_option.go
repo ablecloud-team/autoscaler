@@ -26,10 +26,11 @@ import (
 )
 
 type managerConfig struct {
-	asg       *asg
-	acsConfig *service.Config
-	service   service.CKSService
-	file      string
+	asg        *asg
+	acsConfig  *service.Config
+	service    service.CKSService
+	file       string
+	clusterUID string
 }
 
 type option func(*managerConfig)
@@ -93,10 +94,12 @@ func createConfig(opts ...option) (*managerConfig, error) {
 		if err != nil {
 			return nil, err
 		}
+		cfg.clusterUID = config.Global.ClusterUID
 		cfg.acsConfig = &service.Config{
 			APIKey:    config.Global.APIKey,
 			SecretKey: config.Global.SecretKey,
 			Endpoint:  config.Global.APIURL,
+			ProjectID: config.Global.ProjectID,
 		}
 	}
 

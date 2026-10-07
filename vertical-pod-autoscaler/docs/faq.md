@@ -2,17 +2,20 @@
 
 ## Contents
 
-- [VPA restarts my pods but does not modify CPU or memory settings. Why?](#vpa-restarts-my-pods-but-does-not-modify-cpu-or-memory-settings)
+<!-- toc -->
+- [VPA restarts my pods but does not modify CPU or memory settings](#vpa-restarts-my-pods-but-does-not-modify-cpu-or-memory-settings)
 - [How can I apply VPA to my Custom Resource?](#how-can-i-apply-vpa-to-my-custom-resource)
-- [How can I use Prometheus as a history provider for the VPA recommender?](#how-can-i-use-prometheus-as-a-history-provider-for-the-vpa-recommender)
-- [I get recommendations for my single pod replicaSet, but they are not applied. Why?](#i-get-recommendations-for-my-single-pod-replicaset-but-they-are-not-applied)
+- [How can I use Prometheus as a history provider for the VPA recommender](#how-can-i-use-prometheus-as-a-history-provider-for-the-vpa-recommender)
+- [I get recommendations for my single pod replicaset but they are not applied](#i-get-recommendations-for-my-single-pod-replicaset-but-they-are-not-applied)
 - [Can I run the VPA in an HA configuration?](#can-i-run-the-vpa-in-an-ha-configuration)
 - [What are the parameters to VPA recommender?](#what-are-the-parameters-to-vpa-recommender)
 - [What are the parameters to VPA updater?](#what-are-the-parameters-to-vpa-updater)
-- [What are the parameters to VPA admission-controller?](#what-are-the-parameters-to-vpa-admission-controller)
+- [What are the parameters to VPA admission controller?](#what-are-the-parameters-to-vpa-admission-controller)
 - [How can I configure VPA to manage only specific resources?](#how-can-i-configure-vpa-to-manage-only-specific-resources)
 - [How can I have Pods in the kube-system namespace under VPA control in AKS?](#how-can-i-have-pods-in-the-kube-system-namespace-under-vpa-control-in-aks)
 - [How can I configure VPA when running in EKS with Cilium?](#how-can-i-configure-vpa-when-running-in-eks-with-cilium)
+- [How does VPA treat resource requests and limits?](#how-does-vpa-treat-resource-requests-and-limits)
+<!-- /toc -->
 
 ### VPA restarts my pods but does not modify CPU or memory settings
 
@@ -126,6 +129,9 @@ resource recommendations, this ensures that all Pods with a matching VPA object 
 recreate them after eviction. Furthermore, it avoids misconfigurations that happened in the past when label selectors
 were specified manually.
 
+> [!WARNING]
+> VPA can only manage Pods that are directly owned by the targeted Custom Resource. It does not support indirect ownership (e.g., targeting a resource that owns another controller, which in turn owns the Pods).
+
 ### How can I use Prometheus as a history provider for the VPA recommender
 
 Configure your Prometheus to get metrics from cadvisor. Make sure that the metrics from the cadvisor have the label `job=kubernetes-cadvisor`
@@ -151,6 +157,55 @@ Here you should see the flags that you set for the VPA recommender and you shoul
 ```Initializing VPA from history provider```
 
 This means that the VPA recommender is now using Prometheus as the history provider.
+
+
+For authentication to Prometheus, you can provide credentials in following ways:
+
+1) Set the flags `--username=<user>` and `--password=<password>` in the `VPA recommender deployment`. The `args` for the container should look something like this:
+
+```yaml
+spec:
+  containers:
+  - args:
+    - --v=4
+    - --storage=prometheus
+    - --prometheus-address=http://prometheus.default.svc.cluster.local:9090
+    - --username=example-user
+    - --password=example-password
+```
+
+2) Set the environment variables `PROMETHEUS_USERNAME` and `PROMETHEUS_PASSWORD` in the `VPA recommender deployment`.
+
+```yaml
+spec:
+  containers:
+  - args:
+    - --storage=prometheus
+    - --prometheus-address=http://prometheus.default.svc.cluster.local:9090
+  env:
+  - name: PROMETHEUS_USERNAME
+    valueFrom:
+      secretKeyRef:
+        name: prometheus-auth
+        key: example-user
+  - name: PROMETHEUS_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: prometheus-auth
+        key: example-password
+```
+
+3) Set the flag `prometheus-bearer-token=<token>`, to use bearer token auth.
+
+```yaml
+spec:
+  containers:
+  - args:
+    - --v=4
+    - --storage=prometheus
+    - --prometheus-address=http://prometheus.default.svc.cluster.local:9090
+    - --prometheus-bearer-token=<example-token>
+```
 
 ### I get recommendations for my single pod replicaset but they are not applied
 
@@ -210,7 +265,7 @@ spec:
     kind: Deployment
     name: my-app
   updatePolicy:
-    updateMode: "Auto"
+    updateMode: "Recreate"  # Use explicit mode instead of deprecated "Auto"
   resourcePolicy:
     containerPolicies:
     - containerName: "*"
@@ -244,3 +299,40 @@ The `--webhook-labels` parameter for the VPA admission-controller can be used to
 When running in EKS with Cilium, the EKS API server cannot route traffic to the overlay network. The VPA admission-controller
 Pods either need to use host networking or be exposed through a service or ingress.
 See the [Cilium Helm installation page](https://docs.cilium.io/en/stable/installation/k8s-install-helm/) for more info.
+
+### How does VPA treat resource requests and limits?
+
+VPA can update **requests** and, depending on container resource policy,
+**limits**. Per-container `controlledValues` is either `RequestsAndLimits`
+(default: scale both, keeping the original request:limit ratio when both were
+set) or `RequestsOnly` (scale requests only).
+
+Kubernetes and VPA do not always treat the same values the same way:
+
+| Original pod values | Kubernetes behavior | Typical VPA outcome |
+|---------------------|---------------------|---------------------|
+| request and limit both **unset** | BestEffort (for that resource) | Recommendations can set requests; limits are also set when `controlledValues` is `RequestsAndLimits` (the default). With `RequestsOnly`, only requests change |
+| request and limit set to **equal non-zero** values | Guaranteed QoS when all resources match | VPA keeps ratio 1:1 while updating values |
+| request and limit set to **different non-zero** values | Burstable | VPA preserves the original request:limit ratio |
+| request and limit both explicitly **`0`** | Treated like unset for QoS (BestEffort) | VPA may recommend a **non-zero request** while leaving a **zero limit**, which the API server then rejects (`request must be ≤ limit`) |
+
+Important points:
+
+1. **A limit of `0` is not "unlimited" in Kubernetes.** If the field is present
+   with value `0`, validation still enforces `request ≤ limit`. Omitting the
+   limit field is different from setting it to zero.
+2. **VPA does not use `limit: 0` as a special "no limit" sentinel.** Prefer
+   removing limits from the pod template (or from your Helm/chart defaults)
+   instead of writing zeros to clear defaults.
+3. **Changing requests/limits can change QoS.** Zero-valued specs make that
+   harder because Kubernetes treats zeros like "unset" for QoS while still
+   validating numbers literally when the fields are present.
+
+If you see admission errors such as `must be less than or equal to cpu limit of 0`
+after a VPA recommendation, check whether the original pod (or chart) set
+`limits` to zero. Fix the template so limits are either omitted or set to a real
+value consistent with the intended request:limit ratio.
+
+See also the discussion in
+[kubernetes/autoscaler#7882](https://github.com/kubernetes/autoscaler/issues/7882)
+and [kubernetes/autoscaler#7895](https://github.com/kubernetes/autoscaler/issues/7895).

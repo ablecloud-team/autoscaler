@@ -19,17 +19,18 @@ package priority
 import (
 	"math"
 
-	apiv1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/annotations"
+	resourcehelpers "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/resources"
 	vpa_api_util "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/vpa"
 )
 
 // PriorityProcessor calculates priority for pod updates.
 type PriorityProcessor interface {
-	GetUpdatePriority(pod *apiv1.Pod, vpa *vpa_types.VerticalPodAutoscaler,
+	GetUpdatePriority(pod *corev1.Pod, vpa *vpa_types.VerticalPodAutoscaler,
 		recommendation *vpa_types.RecommendedPodResources) PodPriority
 }
 
@@ -41,14 +42,14 @@ func NewProcessor() PriorityProcessor {
 type defaultPriorityProcessor struct {
 }
 
-func (*defaultPriorityProcessor) GetUpdatePriority(pod *apiv1.Pod, vpa *vpa_types.VerticalPodAutoscaler,
+func (*defaultPriorityProcessor) GetUpdatePriority(pod *corev1.Pod, vpa *vpa_types.VerticalPodAutoscaler,
 	recommendation *vpa_types.RecommendedPodResources) PodPriority {
 	outsideRecommendedRange := false
 	scaleUp := false
 	// Sum of requests over all containers, per resource type.
-	totalRequestPerResource := make(map[apiv1.ResourceName]int64)
+	totalRequestPerResource := make(map[corev1.ResourceName]int64)
 	// Sum of recommendations over all containers, per resource type.
-	totalRecommendedPerResource := make(map[apiv1.ResourceName]int64)
+	totalRecommendedPerResource := make(map[corev1.ResourceName]int64)
 
 	hasObservedContainers, vpaContainerSet := parseVpaObservedContainers(pod)
 
@@ -65,7 +66,8 @@ func (*defaultPriorityProcessor) GetUpdatePriority(pod *apiv1.Pod, vpa *vpa_type
 			totalRecommendedPerResource[resourceName] += recommended.MilliValue()
 			lowerBound, hasLowerBound := recommendedRequest.LowerBound[resourceName]
 			upperBound, hasUpperBound := recommendedRequest.UpperBound[resourceName]
-			if request, hasRequest := podContainer.Resources.Requests[resourceName]; hasRequest {
+			requests, _ := resourcehelpers.ContainerRequestsAndLimits(podContainer.Name, pod)
+			if request, hasRequest := requests[resourceName]; hasRequest {
 				totalRequestPerResource[resourceName] += request.MilliValue()
 				if recommended.MilliValue() > request.MilliValue() {
 					scaleUp = true

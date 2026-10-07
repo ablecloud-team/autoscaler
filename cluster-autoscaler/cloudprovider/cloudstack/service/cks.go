@@ -67,9 +67,12 @@ type Cluster struct {
 
 // VirtualMachine represents a node in a CKS cluster
 type VirtualMachine struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	State string `json:"state"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	State        string `json:"state"`
+	ControlNode  *bool  `json:"iscontrolnode"`
+	EtcdNode     bool   `json:"isetcdnode"`
+	ExternalNode bool   `json:"isexternalnode"`
 }
 
 // cksService implements the CKSService interface

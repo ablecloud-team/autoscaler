@@ -19,9 +19,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/client-go/kubernetes"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 
 	ocicommon "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/common"
 	ipconsts "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/instancepools/consts"
@@ -40,6 +40,9 @@ const (
 	nodepoolTags          = "nodepoolTags"
 	min                   = "min"
 	max                   = "max"
+	minSize               = "minSize"
+	maxSize               = "maxSize"
+	ociFaultDomainLabel   = "oci.oraclecloud.com/fault-domain"
 )
 
 var (
@@ -89,6 +92,9 @@ func CreateNodePoolManager(cloudConfigPath string, nodeGroupAutoDiscoveryList []
 
 	var err error
 	var configProvider common.ConfigurationProvider
+
+	// enable SDK to look up the IMDS endpoint to figure out the right realmDomain
+	common.EnableInstanceMetadataServiceLookup()
 
 	if os.Getenv(ipconsts.OciUseWorkloadIdentityEnvVar) == "true" {
 		klog.Info("using workload identity provider")
@@ -214,19 +220,32 @@ func autoDiscoverNodeGroups(m *ociManagerImpl, okeClient okeClient, nodeGroup no
 		if validateNodepoolTags(nodeGroup.tags, nodePoolSummary.FreeformTags, nodePoolSummary.DefinedTags) {
 			nodepool := &nodePool{}
 			nodepool.id = *nodePoolSummary.Id
-			nodepool.minSize = nodeGroup.minSize
-			nodepool.maxSize = nodeGroup.maxSize
+			// set minSize-maxSize from nodepool free form tags, or else use nodeGroupAutoDiscovery configuration
+			nodepool.minSize = getIntFromMap(nodePoolSummary.FreeformTags, minSize, nodeGroup.minSize)
+			nodepool.maxSize = getIntFromMap(nodePoolSummary.FreeformTags, maxSize, nodeGroup.maxSize)
 
 			nodepool.manager = nodeGroup.manager
 			nodepool.kubeClient = nodeGroup.kubeClient
 
 			m.staticNodePools[nodepool.id] = nodepool
-			klog.V(5).Infof("auto discovered nodepool in compartment : %s , nodepoolid: %s", nodeGroup.compartmentId, nodepool.id)
+			klog.V(4).Infof("auto discovered nodepool in compartment : %s , nodepoolid: %s ,minSize: %d, maxSize:%d", nodeGroup.compartmentId, nodepool.id, nodepool.minSize, nodepool.maxSize)
 		} else {
 			klog.Warningf("nodepool ignored as the tags do not satisfy the requirement : %s , %v, %v", *nodePoolSummary.Id, nodePoolSummary.FreeformTags, nodePoolSummary.DefinedTags)
 		}
 	}
 	return true, nil
+}
+
+func getIntFromMap(m map[string]string, key string, defaultValue int) int {
+	value, ok := m[key]
+	if !ok {
+		return defaultValue
+	}
+	i, err := strconv.Atoi(value)
+	if err != nil {
+		return defaultValue
+	}
+	return i
 }
 
 func validateNodepoolTags(nodeGroupTags map[string]string, freeFormTags map[string]string, definedTags map[string]map[string]interface{}) bool {
@@ -394,10 +413,34 @@ func (m *ociManagerImpl) TaintToPreventFurtherSchedulingOnRestart(nodes []*apiv1
 func (m *ociManagerImpl) forceRefresh() error {
 	// auto discover node groups
 	if m.nodeGroups != nil {
-		// empty previous nodepool map to do an auto discovery
+		// create a copy of m.staticNodePools to use it in comparison
+		staticNodePoolsCopy := make(map[string]NodePool)
+		for k, v := range m.staticNodePools {
+			staticNodePoolsCopy[k] = v
+		}
+
+		// empty previous nodepool map to do a fresh auto discovery
 		m.staticNodePools = make(map[string]NodePool)
+
+		// run auto-discovery
 		for _, nodeGroup := range m.nodeGroups {
 			autoDiscoverNodeGroups(m, m.okeClient, nodeGroup)
+		}
+
+		// compare the new and previous nodepool list to log the updates
+		for nodepoolId, nodepool := range m.staticNodePools {
+			if _, ok := staticNodePoolsCopy[nodepoolId]; !ok {
+				klog.Infof("New nodepool discovered. [id: %s ,minSize: %d, maxSize:%d]", nodepool.Id(), nodepool.MinSize(context.TODO()), nodepool.MaxSize(context.TODO()))
+			} else if staticNodePoolsCopy[nodepoolId].MinSize(context.TODO()) != nodepool.MinSize(context.TODO()) || staticNodePoolsCopy[nodepoolId].MaxSize(context.TODO()) != nodepool.MaxSize(context.TODO()) {
+				klog.Infof("Nodepool min/max sizes are updated. [id: %s ,minSize: %d, maxSize:%d]", nodepool.Id(), nodepool.MinSize(context.TODO()), nodepool.MaxSize(context.TODO()))
+			}
+		}
+
+		// log if there are nodepools removed from the list
+		for k := range staticNodePoolsCopy {
+			if _, ok := m.staticNodePools[k]; !ok {
+				klog.Infof("Previously auto-discovered nodepool removed from the managed nodepool list. nodepoolid: %s", k)
+			}
 		}
 	}
 	// rebuild nodepool cache
@@ -519,6 +562,7 @@ func (m *ociManagerImpl) GetNodePoolNodes(np NodePool) ([]cloudprovider.Instance
 
 	nodePool, err := m.nodePoolCache.get(np.Id())
 	if err != nil {
+		klog.Error(err, "error while performing GetNodePoolNodes call")
 		return nil, err
 	}
 
@@ -527,10 +571,14 @@ func (m *ociManagerImpl) GetNodePoolNodes(np NodePool) ([]cloudprovider.Instance
 
 		if node.NodeError != nil {
 
+			// We should move away from the approach of determining a node error as a Out of host capacity
+			// through string comparison. An error code specifically for Out of host capacity must be set
+			// and returned in the API response.
 			errorClass := cloudprovider.OtherErrorClass
 			if *node.NodeError.Code == "LimitExceeded" ||
-				(*node.NodeError.Code == "InternalServerError" &&
-					strings.Contains(*node.NodeError.Message, "quota")) {
+				*node.NodeError.Code == "QuotaExceeded" ||
+				(*node.NodeError.Code == "InternalError" &&
+					strings.Contains(*node.NodeError.Message, "Out of host capacity")) {
 				errorClass = cloudprovider.OutOfResourcesErrorClass
 			}
 
@@ -583,6 +631,9 @@ func (m *ociManagerImpl) GetNodePoolNodes(np NodePool) ([]cloudprovider.Instance
 
 // GetNodePoolForInstance returns NodePool to which the given instance belongs.
 func (m *ociManagerImpl) GetNodePoolForInstance(instance ocicommon.OciRef) (NodePool, error) {
+	if strings.Contains(instance.InstanceID, npconsts.OciVirtualNodeResourceIdent) {
+		return nil, nil
+	}
 	if instance.NodePoolID == "" {
 		klog.V(4).Infof("node pool id missing from reference: %+v", instance)
 
@@ -597,7 +648,7 @@ func (m *ociManagerImpl) GetNodePoolForInstance(instance ocicommon.OciRef) (Node
 
 	np, found := m.staticNodePools[instance.NodePoolID]
 	if !found {
-		klog.V(4).Infof("did not find node pool for reference: %+v", instance)
+		klog.V(5).Infof("did not find node pool for reference: %+v", instance)
 		return nil, errInstanceNodePoolNotFound
 	}
 
@@ -720,6 +771,9 @@ func (m *ociManagerImpl) buildNodeFromTemplate(nodePool *oke.NodePool) (*apiv1.N
 	}
 
 	node.Labels = cloudprovider.JoinStringMaps(node.Labels, ocicommon.BuildGenericLabels(*nodePool.Id, nodeName, shape.Name, availabilityDomain))
+	if faultDomain := getNodePoolFaultDomain(nodePool); faultDomain != "" {
+		node.Labels[ociFaultDomainLabel] = faultDomain
+	}
 
 	node.Status.Conditions = cloudprovider.BuildReadyConditions()
 	return &node, nil
@@ -742,6 +796,26 @@ func getNodePoolAvailabilityDomain(np *oke.NodePool) (string, error) {
 	// and remove the hash prefix.
 	availabilityDomain := strings.Split(*np.NodeConfigDetails.PlacementConfigs[0].AvailabilityDomain, ":")[1]
 	return availabilityDomain, nil
+}
+
+// getNodePoolFaultDomain returns the fault domain used by the template node.
+// Node pools spanning multiple fault domains cannot be represented exactly by a
+// single template, so this follows the availability-domain behavior and uses
+// the first fault domain from the first placement configuration.
+func getNodePoolFaultDomain(np *oke.NodePool) string {
+	if np == nil || np.NodeConfigDetails == nil || len(np.NodeConfigDetails.PlacementConfigs) == 0 {
+		return ""
+	}
+
+	faultDomains := np.NodeConfigDetails.PlacementConfigs[0].FaultDomains
+	if len(faultDomains) == 0 {
+		return ""
+	}
+	if len(faultDomains) > 1 {
+		klog.Warningf("node pool %q has more than 1 fault domain so picking first fault domain", *np.Id)
+	}
+
+	return faultDomains[0]
 }
 
 func addTaint(node *apiv1.Node, client kubernetes.Interface, taintKey string, effect apiv1.TaintEffect) error {

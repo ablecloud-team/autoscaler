@@ -1,7 +1,7 @@
 all: build
 
 TAG?=dev
-REGISTRY?=staging-k8s.gcr.io
+REGISTRY?=gcr.io/k8s-staging-autoscaling
 FLAGS=
 TEST_ENVVAR=LD_FLAGS=-s GO111MODULE=on
 ENVVAR=CGO_ENABLED=0 $(TEST_ENVVAR)
@@ -51,13 +51,13 @@ ifndef TAG
 	ERR = $(error TAG is undefined)
 	$(ERR)
 endif
-	docker push ${REGISTRY}/${FULL_COMPONENT}-$*:${TAG}
+	../../hack/retry.sh docker push ${REGISTRY}/${FULL_COMPONENT}-$*:${TAG}
 
 .PHONY: push-multi-arch
 push-multi-arch:
 	docker manifest create --amend $(REGISTRY)/${FULL_COMPONENT}:$(TAG) $(shell echo $(ALL_ARCHITECTURES) | sed -e "s~[^ ]*~$(REGISTRY)/${FULL_COMPONENT}\-&:$(TAG)~g")
 	@for arch in $(ALL_ARCHITECTURES); do docker manifest annotate --arch $${arch} $(REGISTRY)/${FULL_COMPONENT}:$(TAG) $(REGISTRY)/${FULL_COMPONENT}-$${arch}:${TAG}; done
-	docker manifest push --purge $(REGISTRY)/${FULL_COMPONENT}:$(TAG)
+	../../hack/retry.sh docker manifest push --purge $(REGISTRY)/${FULL_COMPONENT}:$(TAG)
 
 .PHONY: show-git-info
 show-git-info:
@@ -76,7 +76,7 @@ remove-buildx-builder:
 	docker buildx rm ${BUILDER}
 
 .PHONY: release
-release: show-git-info create-buildx-builder docker-build remove-buildx-builder docker-push
+release: create-buildx-builder docker-build remove-buildx-builder docker-push
 	@echo "Full in-docker release ${FULL_COMPONENT}:${TAG} completed"
 
 clean: $(addprefix clean-,$(ALL_ARCHITECTURES))

@@ -1,0 +1,71 @@
+# Licensed under the Apache License, Version 2.0.
+name: Mold component candidate
+on:
+  push:
+    branches: [codex/kubernetes-iso-1228]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: mold-component-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        minor: ['1.34', '1.35', '1.36', '1.37']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.26.8'
+          cache: false
+      - name: Build tested minor with shared Mold SHA256 patch
+        env:
+          MINOR: ${{ matrix.minor }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: mold/build-minor.sh "$MINOR" "$RUNNER_TEMP/component"
+      - name: Publish immutable Origin candidate
+        if: github.event_name != 'pull_request' && github.repository_owner == 'dhslove'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          MINOR: ${{ matrix.minor }}
+        run: |
+          set -euo pipefail
+          mkdir -p cluster-autoscaler/bin
+          cp "$RUNNER_TEMP/component/cluster-autoscaler" cluster-autoscaler/bin/
+          TAG="mold-test-${SOURCE_SHA:0:12}-k8s${MINOR}"
+          if gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then echo "Immutable candidate Release already exists" >&2; exit 1; fi
+          IMAGE="ghcr.io/${REPOSITORY}:sha-${SOURCE_SHA}-k8s${MINOR}"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u dhslove --password-stdin
+          PATCH_HASH=$(sha256sum cluster-autoscaler/cloudprovider/cloudstack/service/client.go | cut -d' ' -f1)
+          IDENTITY_HASH=$(sha256sum cluster-autoscaler/cloudprovider/cloudstack/service/mold_worker_identity.go | cut -d' ' -f1)
+          if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then echo "Immutable candidate image already exists" >&2; exit 1; fi
+          docker build -f cluster-autoscaler/Dockerfile.mold --label org.opencontainers.image.revision="$SOURCE_SHA" --label org.opencontainers.image.source="https://github.com/$REPOSITORY" --label io.ablestack.api-signature=HMAC-SHA256 --label io.ablestack.mold-client-sha256="$PATCH_HASH" --label io.ablestack.mold-worker-identity-sha256="$IDENTITY_HASH" -t "$IMAGE" cluster-autoscaler
+          docker push "$IMAGE"
+          docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE" > "$RUNNER_TEMP/component/image-digest.txt"
+          docker save "$IMAGE" -o "$RUNNER_TEMP/component/image-amd64.tar"
+          python3 - <<'PY'
+          import json,os,pathlib
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'component';f=p/'provenance.json';v=json.loads(f.read_text());v['image']=(p/'image-digest.txt').read_text().strip();f.write_text(json.dumps(v,indent=2)+'\n')
+          PY
+          cd "$RUNNER_TEMP/component"
+          sha256sum image-amd64.tar > SHA256SUMS
+          TAG="mold-test-${SOURCE_SHA:0:12}-k8s${MINOR}"
+          gh release create "$TAG" image-amd64.tar image-digest.txt provenance.json go-modules.txt SHA256SUMS --repo "$REPOSITORY" --target "$SOURCE_SHA" --prerelease --latest=false --title "$TAG" --notes "Kubernetes $MINOR용 내부 SHA256 검증 후보. 1.37은 안정 AutoScaler 릴리즈 이전의 개발 기준입니다. provenance를 확인하십시오."
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mold-autoscaler-${{ matrix.minor }}-amd64
+          path: ${{ runner.temp }}/component/

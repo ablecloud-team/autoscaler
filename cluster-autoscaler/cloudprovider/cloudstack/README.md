@@ -47,3 +47,7 @@ kubectl apply -f cluster-autoscaler-standard.yaml
 - The automated deployment of the autoscaler will run with the defaults configured [here](./examples/cluster-autoscaler-standard.yaml). To change it, alter the file and deploy it again.
 - By default, cluster autoscaler will not terminate nodes running pods in the kube-system namespace. You can override this default behaviour by passing in the `--skip-nodes-with-system-pods=false` flag.
 - By default, cluster autoscaler will wait 10 minutes between scale down operations, you can adjust this using the `--scale-down-delay` flag. E.g. `--scale-down-delay=5m` to decrease the scale down delay to 5 minutes.
+
+## Mold worker identity contract
+
+Mold candidates require `listKubernetesClusters.virtualmachines[].iscontrolnode` in addition to the existing etcd/external node flags. Missing role metadata fails closed. The autoscaler group contains managed workers only; control-plane and etcd VMs are excluded. Real Node hostnames and synthetic cloud instance UUIDs resolve within the configured cluster. Explicit `cloudstack://` provider IDs are authoritative, unknown or duplicate identities are rejected, and node deletion requires a unique typed worker match. The minor build script applies the shared behavior without replacing the upstream minor-specific interfaces. Binary, overlay and image hashes are recorded in candidate provenance.
